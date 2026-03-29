@@ -1,18 +1,6 @@
+use std::fs;
 
-#[derive(Debug, Clone)]
-pub enum SystemError {
-    ReadError(String),
-    ParseError(String),
-}
-
-impl std::fmt::Display for SystemError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SystemError::ReadError(msg) => write!(f, "Read error: {}", msg),
-            SystemError::ParseError(msg) => write!(f, "Parsing error: {}", msg),
-        }
-    }
-}
+use crate::system::system_error::SystemError;
 
 #[derive(Debug, Clone)]
 pub struct CpuInfo {
@@ -23,10 +11,14 @@ pub struct CpuInfo {
 
 #[derive(Debug, Clone)]
 pub struct MemoryInfo {
-    pub memory_total_bytes: f64,
+    pub memory_total_bytes: u64,
     pub memory_available_bytes: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct DiskInfo {
     pub disk_total_bytes: u64,
-    pub disk_available_space: u64,
+    pub disk_available_bytes: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -38,17 +30,29 @@ pub struct GpuInfo {
 
 #[derive(Debug, Clone)]
 pub struct SystemSnapshot {
-    pub cpu_info: CpuInfo,
-    pub memory_info: MemoryInfo,
-    pub gpu_info: Option<GpuInfo>,
+    pub cpu: CpuInfo,
+    pub disk: DiskInfo,
+    pub memory: MemoryInfo,
+    pub gpu: Option<GpuInfo>,
     pub hostname: String,
 }
 
 impl SystemSnapshot {
     pub fn collect() -> Result<Self, SystemError> {
         let cpu = Self::read_cpu()?;
+        let memory = Self::read_memory()?;
+        let disk = Self::read_disk()?;
+        let hostname = gethostname::gethostname()
+            .to_string_lossy()
+            .to_string();
 
-        todo!()
+        Ok(SystemSnapshot {
+            cpu,
+            memory,
+            disk,
+            gpu: None,
+            hostname,
+        })
     }
 
     pub fn display(&self) {
@@ -81,26 +85,39 @@ impl SystemSnapshot {
             .count();
 
         if cpu_cores == 0 {
-            return Err(ParseError::ParseError(
+            return Err(SystemError::ParseError(
                 format!("Found 0 processors in {}", cpuinfo_path).to_string(),
             ));
         }
 
+        let cpu_freq_mhz: f64 = contents
+            .lines()
+            .find(|line| line.starts_with("cpu MHz"))
+            .ok_or_else(|| SystemError::ParseError("cpu MHz not found".into()))?
+            .split(':')
+            .nth(1)
+            .ok_or_else(|| SystemError::ParseError("cpu MHz malformed".into()))?
+            .trim()
+            .parse()
+            .map_err(|e| SystemError::ParseError(format!("Bad cpu MHz value: {}", e)))?;
+
+
         Ok(CpuInfo {
             cpu_cores,
             cpu_usage_pct: 0.0,
+            cpu_freq_mhz,
         })
     }
 
     fn read_memory() -> Result<MemoryInfo, SystemError> {
-        let meminfo_path: String = "/proc/meminfo";
+        let meminfo_path: &str = "/proc/meminfo";
         let contents: String = fs::read_to_string(meminfo_path)
             .map_err(|e| SystemError::ReadError(format!("{}: {}", meminfo_path, e)))?;
 
         let mut total: Option<u64> = None;
         let mut available: Option<u64> = None;
 
-        for line in contents.line() {
+        for line in contents.lines() {
             if line.starts_with("MemTotal:") {
                 total = Some(Self::parse_meminfo_line(line)?);
             }

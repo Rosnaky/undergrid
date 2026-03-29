@@ -3,24 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-#[derive(Debug, Clone)]
-pub enum ConfigError {
-    NoConfig(String),
-    ConfigAlreadyExists(String),
-    SerializationError(String),
-}
-
-impl std::fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ConfigError::NoConfig(msg) => write!(f, "No configuration: {}", msg),
-            ConfigError::ConfigAlreadyExists(msg) => write!(f, "Configuration already exists: {}", msg),
-            ConfigError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for ConfigError {}
+use crate::config::config_error::ConfigError;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NodeConfig {
@@ -33,8 +16,8 @@ pub struct NodeConfig {
 impl NodeConfig {
     /// Returns ~/.undergrid/config.toml
     fn path() -> Result<PathBuf, ConfigError> {
-        let home = dirs::home_dir
-            .map_err(|e| ConfigError::NoConfig(format!("HOME not set: {}", e)))?;
+        let home = dirs::home_dir()
+            .ok_or_else(|| ConfigError::NoConfig("HOME directory not found".into()))?;
         Ok(PathBuf::from(home).join(".undergrid").join("config.toml"))
     }
 

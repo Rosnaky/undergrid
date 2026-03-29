@@ -10,8 +10,10 @@ path = "src/main.rs"
 [dependencies]
 dirs = "6.0.0"
 gethostname = "1.1.0"
-nix = "0.31.2"
-serde = "1.0.228"
-tokio = "1.50.0"
+nix = { version = "0.31.2", features = ["fs"] }
+serde = { version = "1.0.228", features = ["derive"] }
+tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros", "time", "signal"] }
 toml = "1.1.0"
-uuid = "1.23.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+uuid = { version = "1.23.0", features = ["v4"] }
