@@ -4,11 +4,19 @@ use mesh::undergrid::{HeartbeatRequest, HeartbeatResponse, PingRequest, PingResp
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
-use crate::state::NodeState;
+use crate::state::{NodeInfo, NodeState};
 
 
 pub struct NodeAgentService {
-    pub state: Arc<RwLock<NodeState>>
+    state: Arc<RwLock<NodeState>>
+}
+
+impl NodeAgentService {
+    pub fn new(state: Arc<RwLock<NodeState>>) -> Self {
+        Self {
+            state,
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -41,6 +49,15 @@ impl NodeAgent for NodeAgentService {
             hostname = %node_info.hostname, 
             "Registered node"
         );
+        
+        // Scope in closure to avoid deadlock of mutex
+        {
+            let mut state = self.state.write().await;
+            state.peers.push(NodeInfo {
+                node_id: node_info.node_id,
+                resources: node_info.resources.ok_or_else(|| Status::invalid_argument("resources is invalid"))?,
+            });
+        }
 
         // TODO: This accepts everyone for now. Change to only the leader later
         let state = self.state.read().await;

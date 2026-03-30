@@ -40,14 +40,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.bind_address.clone(),
         config.port,
     )));
+    let heartbeat_state = Arc::clone(&state);
 
     let addr: SocketAddr = format!("{}:{}", config.bind_address, config.port)
         .parse()
         .expect("Invalid bind address");
 
-    let service = NodeAgentService {
-        state: Arc::clone(&state)
-    };
+    let service = NodeAgentService::new(state);
 
     tracing::info!(node_id = %config.node_id, "Undergrid node starting");
 
@@ -57,7 +56,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .serve(addr)
     );
 
-    let heartbeat_state = Arc::clone(&state);
     let mut interval = tokio::time::interval(
         std::time::Duration::from_secs(config.heartbeat_interval_secs)
     );
