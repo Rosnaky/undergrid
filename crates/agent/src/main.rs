@@ -1,5 +1,8 @@
-use agent::{config::config::NodeConfig, system::system::SystemSnapshot};
-use tokio::signal;
+use std::{net::SocketAddr, sync::Arc};
+
+use agent::{config::config::NodeConfig, server::node_agent::NodeAgentService, state::NodeState, system::system::SystemSnapshot};
+use mesh::undergrid::node_agent_server::NodeAgentServer;
+use tokio::{signal, sync::RwLock};
 
 
 #[tokio::main]
@@ -31,8 +34,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     SystemSnapshot::display(&system_snapshot);
 
+    let state = Arc::new(RwLock::new(NodeState::new(
+        config.node_id.clone(),
+        system_snapshot.hostname.clone(),
+        config.bind_address.clone(),
+        config.port,
+    )));
+
+    let addr: SocketAddr = format!("{}:{}", config.bind_address, config.port)
+        .parse()
+        .expect("Invalid bind address");
+
+    let service = NodeAgentService {
+        state: Arc::clone(&state)
+    };
+
     tracing::info!(node_id = %config.node_id, "Undergrid node starting");
 
+    let grpc_handle = tokio::spawn(
+        tonic::transport::Server::builder()
+            .add_service(NodeAgentServer::new(service))
+            .serve(addr)
+    );
+
+    let heartbeat_state = Arc::clone(&state);
     let mut interval = tokio::time::interval(
         std::time::Duration::from_secs(config.heartbeat_interval_secs)
     );
@@ -40,20 +65,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                let system_snapshot: SystemSnapshot = match SystemSnapshot::collect() {
-                    Ok(snapshot) => snapshot,
+                match SystemSnapshot::collect() {
+                    Ok(snapshot) => {
+                        let mut s = heartbeat_state.write().await;
+                        s.last_snapshot = Some(snapshot.clone());
+                        tracing::debug!(
+                            cpu_cores = snapshot.cpu.cpu_cores,
+                            "Heartbeat tick"
+                        );
+                    },
                     Err(e) => {
                         tracing::error!("Failed to get system snapshot: {}", e);
                         break;
                     }
                 };
-
-                tracing::info!(
-                    cpu_cores = system_snapshot.cpu.cpu_cores,
-                    mem_used_mb = (system_snapshot.memory.memory_total_bytes - system_snapshot.memory.memory_available_bytes) / 1_048_576,
-                    mem_total_mb = system_snapshot.memory.memory_total_bytes / 1_048_576,
-                    "heartbeat"
-                );
             }
             _ = signal::ctrl_c() => {
                 tracing::info!("Received shutdown signal");
@@ -62,6 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    grpc_handle.abort();
     tracing::info!("Undergrid node shut down");
 
     Ok(())
