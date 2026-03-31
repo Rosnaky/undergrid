@@ -56,8 +56,34 @@ message HeartbeatResponse {
     bool acknowledged = 1;
 }
 
+// Vote
+
+message VoteRequest {
+    uint64 term = 1;
+    string candidate_id = 2;
+}
+
+message VoteResponse {
+    uint64 term = 1;
+    bool granted = 2;
+}
+
+// Entries
+
+message AppendEntriesRequest {
+    uint64 term = 1;
+    string leader_id = 2;
+}
+
+message AppendEntriesResponse {
+    uint64 term = 1;
+    bool success = 2;
+}
+
 service NodeAgent {
     rpc Ping (PingRequest) returns (PingResponse);
     rpc Register (RegisterRequest) returns (RegisterResponse);
     rpc Heartbeat (HeartbeatRequest) returns (HeartbeatResponse);
+    rpc Vote (VoteRequest) returns (VoteResponse);
+    rpc AppendEntries (AppendEntriesRequest) returns (AppendEntriesResponse);
 }
