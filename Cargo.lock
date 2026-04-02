@@ -12,6 +12,7 @@ dependencies = [
  "mesh",
  "nix",
  "prost",
+ "raft",
  "serde",
  "tokio",
  "toml",

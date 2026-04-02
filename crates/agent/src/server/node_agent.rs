@@ -1,14 +1,15 @@
 use std::sync::Arc;
 
-use mesh::undergrid::{HeartbeatRequest, HeartbeatResponse, PingRequest, PingResponse, RegisterRequest, RegisterResponse, node_agent_server::NodeAgent};
+use mesh::undergrid::{AppendEntriesRequest, AppendEntriesResponse, HeartbeatRequest, HeartbeatResponse, PingRequest, PingResponse, RegisterRequest, RegisterResponse, VoteRequest, VoteResponse, node_agent_server::NodeAgent};
+use raft::RaftMessage;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
-use crate::state::{NodeInfo, NodeState};
+use crate::state::NodeState;
 
 
 pub struct NodeAgentService {
-    state: Arc<RwLock<NodeState>>
+    state: Arc<RwLock<NodeState>>,
 }
 
 impl NodeAgentService {
@@ -31,7 +32,7 @@ impl NodeAgent for NodeAgentService {
         tracing::info!(from = %req.from_node_id, "Received ping");
 
         Ok(Response::new(PingResponse {
-            node_id: state.node_id.clone(),
+            node_id: state.raft.node_id.clone(),
             uptime_secs: state.uptime_secs(),
         }))
     }
@@ -53,9 +54,9 @@ impl NodeAgent for NodeAgentService {
         // Scope in closure to avoid deadlock of mutex
         {
             let mut state = self.state.write().await;
-            state.peers.push(NodeInfo {
+            state.raft.add_peer(raft::Peer {
                 node_id: node_info.node_id,
-                resources: node_info.resources.ok_or_else(|| Status::invalid_argument("resources is invalid"))?,
+                addr: format!("http://{}:{}", node_info.ip_address, node_info.port),
             });
         }
 
@@ -65,7 +66,7 @@ impl NodeAgent for NodeAgentService {
         Ok(Response::new(RegisterResponse {
             accepted: true,
             cluster_id: state.cluster_id.clone().unwrap_or_default(),
-            leader_id: state.leader_id.clone().unwrap_or_default(),
+            leader_id: state.raft.node_id.clone(),
         }))
     }
 
@@ -84,5 +85,67 @@ impl NodeAgent for NodeAgentService {
         Ok(Response::new(HeartbeatResponse {
             acknowledged: true,
         }))
+    }
+
+    async fn vote(
+        &self,
+        request: Request<VoteRequest>,
+    ) -> Result<Response<VoteResponse>, Status> {
+        let req = request.into_inner();
+
+        tracing::debug!(
+            from = %req.candidate_id.clone(),
+            term = req.term,
+            "Received request to vote"
+        );
+
+        let mut state = self.state.write().await;
+        let resp: RaftMessage = state.raft.handle_vote_request(
+            req.candidate_id, req.term
+        );
+
+        drop(state);
+
+        match resp {
+            RaftMessage::VoteResponse { term, granted, .. } => {
+                Ok(Response::new(VoteResponse {
+                    term,
+                    granted,
+                }))
+            }
+            _ => Err(Status::internal("Unexpected raft message type")),
+        }
+        
+        
+    }
+
+    async fn append_entries(
+        &self,
+        request: Request<AppendEntriesRequest>,
+    ) -> Result<Response<AppendEntriesResponse>, Status> {
+        let req = request.into_inner();
+
+        tracing::debug!(
+            from = %req.leader_id.clone(),
+            term = req.term,
+            "Received request to append entries from leader"
+        );
+
+        let mut state = self.state.write().await;
+        let resp: RaftMessage = state.raft.handle_append_entries_request(
+            req.leader_id, req.term
+        );
+
+        drop(state);
+
+        match resp {
+            RaftMessage::AppendEntriesResponse { term, success, .. } => {
+                Ok(Response::new(AppendEntriesResponse {
+                    term,
+                    success,
+                }))
+            }
+            _ => Err(Status::internal("Unexpected raft message type")),
+        }
     }
 }

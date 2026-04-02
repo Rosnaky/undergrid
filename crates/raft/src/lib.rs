@@ -2,11 +2,17 @@ use std::{collections::HashSet, time::Instant};
 
 use rand::RngExt;
 
-
+#[derive(Debug, Clone)]
 pub enum Role {
     Follower,
     Candidate,
     Leader,
+}
+
+#[derive(Debug, Clone)]
+pub struct Peer {
+    pub node_id: String,
+    pub addr: String,
 }
 
 pub struct RaftNode {
@@ -17,7 +23,7 @@ pub struct RaftNode {
     // Volatile
     pub role: Role,
     pub node_id: String,
-    pub peers: Vec<String>,
+    pub peers: Vec<Peer>,
     pub leader_id: Option<String>,
 
     // Election
@@ -51,7 +57,7 @@ pub enum RaftMessage {
 }
 
 impl RaftNode {
-    pub fn new(node_id: String, peers: Vec<String>) -> Self {
+    pub fn new(node_id: String, peers: Vec<Peer>) -> Self {
         let mut rng = rand::rng();
 
         Self {
@@ -67,10 +73,11 @@ impl RaftNode {
         }
     }
 
-    
-    // Private functions
-    
-    pub fn should_start_election(&mut self) -> bool {
+    pub fn add_peer(&mut self, peer: Peer) {
+        self.peers.push(peer);
+    }
+
+    pub fn should_start_election(&self) -> bool {
         (Instant::now() - self.last_heartbeat).as_millis() >= self.election_timeout_ms.into()
     }
 
@@ -82,10 +89,17 @@ impl RaftNode {
         self.last_heartbeat = Instant::now();
         self.reset_election_timeout();
 
+        // Single node system
+        if 1 >= self.quorum() {
+            self.role = Role::Leader;
+            self.leader_id = Some(self.node_id.clone());
+            return vec![];
+        }
+
         self.peers
             .iter()
             .map(|peer| RaftMessage::VoteRequest { 
-                to: peer.clone(),
+                to: peer.addr.clone(),
                 term: self.term, 
                 candidate_id: self.node_id.clone(), 
             })
@@ -101,11 +115,10 @@ impl RaftNode {
             }
         }
 
-
         if candidate_term > self.term {
             self.term = candidate_term;
             self.role = Role::Follower;
-            self.voted_for = Some(candidate_id.clone());
+            self.voted_for = None;
             self.leader_id = None;
         }
         
@@ -130,6 +143,10 @@ impl RaftNode {
     }
 
     pub fn handle_vote_response(&mut self, from_id: String, term: u64, granted: bool) -> Vec<RaftMessage> {
+        if !matches!(self.role, Role::Candidate) {
+            return vec![];
+        }
+
         if term > self.term {
             self.term = term;
             self.role = Role::Follower;
@@ -143,14 +160,14 @@ impl RaftNode {
         }
 
         self.votes_received.insert(from_id.clone());
-        if self.votes_received.len() >= self.quorum().try_into().unwrap() {
+        if self.votes_received.len() >= self.quorum() {
             self.role = Role::Leader;
             self.leader_id = Some(self.node_id.clone());
 
             return self.peers
                 .iter()
                 .map(|peer| RaftMessage::AppendEntriesRequest { 
-                    to: peer.clone(), 
+                    to: peer.addr.clone(), 
                     term: self.term, 
                     leader_id: self.node_id.clone(),
                 })
@@ -184,14 +201,26 @@ impl RaftNode {
         }
     }
 
+    pub fn handle_append_entries_response(&mut self, term: u64, success: bool) {
+        let _ = success;
+        if term > self.term {
+            self.term = term;
+            self.role = Role::Follower;
+            self.voted_for = None;
+            self.last_heartbeat = Instant::now();
+            self.reset_election_timeout();
+        }
+    }
+
     pub fn quorum(&self) -> usize {
         (self.peers.len() + 1) / 2 + 1
     }
-    
+        
+    // Private functions
+
     fn reset_election_timeout(&mut self) {
         let mut rng = rand::rng();
 
         self.election_timeout_ms = rng.random_range(150..=300);
     }
-
 }
