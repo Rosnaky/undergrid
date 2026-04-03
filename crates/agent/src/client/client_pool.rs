@@ -4,19 +4,19 @@ use mesh::undergrid::node_agent_client::NodeAgentClient;
 use tokio::sync::RwLock;
 use tonic::transport::Channel;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::client::client_error::ClientError;
 
-
+#[derive(Clone)]
 pub struct ClientPool {
-    cache: RwLock<HashMap<String, NodeAgentClient<Channel>>>,
+    cache: Arc<RwLock<HashMap<String, NodeAgentClient<Channel>>>>,
 }
 
 impl ClientPool {
     pub fn new() -> Self {
         Self {
-            cache: RwLock::new(HashMap::new()),
+            cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 

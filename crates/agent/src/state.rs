@@ -3,6 +3,7 @@ use tokio::time::Instant;
 
 use crate::system::system::SystemSnapshot;
 
+// TODO: Add resources for all peers
 pub struct NodeState {
     pub hostname: String,
     pub bind_address: String,

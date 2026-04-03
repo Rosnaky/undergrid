@@ -14,7 +14,10 @@ struct Args {
     port: u16,
 
     #[arg(long)]
-    join: Option<String>
+    join_hostname: Option<String>,
+    
+    #[arg(long)]
+    join_port: Option<u16>,
 }
 
 
@@ -32,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     // Load or create config
-    let mut config: NodeConfig = match NodeConfig::load_or_create() {
+    let mut config: NodeConfig = match NodeConfig::load_or_create(args.port) {
         Ok(config) => config,
         Err(e) => {
             tracing::error!("Failed to load config: {}", e);
@@ -69,18 +72,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client_pool = Arc::new(ClientPool::new());
 
     // Get client if it is not a leader node
-    if let Some(ref addr) = args.join {
-        let full_addr = format!("http://{}", addr);
+    if let Some(ref hostname) = args.join_hostname && let Some(port) = args.join_port {
+        let full_addr = format!("http://{}:{}", hostname, port);
         match register_with_leader(&client_pool, &full_addr, &state).await {
             Ok(resp) => {
                 if resp.accepted {
                     let mut s = state.write().await;
                     s.cluster_id = Some(resp.cluster_id);
                     s.raft.add_peer(raft::Peer {
-                        node_id: resp.leader_id,
-                        addr: full_addr,
+                        node_id: resp.leader_id.clone(),
+                        hostname: hostname.clone(),
+                        ip_address: hostname.clone(),
+                        port: port as u32,
                     });
-                    tracing::info!(node_id = &config.node_id, "Registered with leader");
+
+                    for peer_info in resp.peers {
+                        if peer_info.node_id == config.node_id || peer_info.node_id == resp.leader_id {
+                            continue;
+                        }
+
+                        tracing::info!(node_id = peer_info.node_id, "Added peer");
+
+                        s.raft.add_peer(raft::Peer {
+                            node_id: peer_info.node_id,
+                            hostname: peer_info.hostname,
+                            ip_address: peer_info.ip_address,
+                            port: peer_info.port,
+                        });
+                    }
+
+                    tracing::info!(node_id = resp.leader_id, "Registered with leader");
                 }
             }
             Err(e) => {
@@ -122,7 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let leader_addr = {
                                 let s = state.read().await;
                                 s.raft.leader_id.as_ref().and_then(|lid| {
-                                    s.raft.peers.iter().find(|p| p.node_id == *lid).map(|p| p.addr.clone())
+                                    s.raft.peers.iter().find(|p| &p.node_id == lid).map(|p| p.addr().clone())
                                 })
                             };
 
@@ -157,6 +178,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if matches!(role, Role::Follower) || matches!(role, Role::Candidate) {
                     if should_start_election {
+                        {
+                            let s = state.read().await;
+                            tracing::info!(node_id = s.raft.node_id.clone(), term = s.raft.term, "Starting election");
+                        }
                         let election_msgs = {
                             let mut s = state.write().await;
                             s.raft.start_election()
@@ -169,7 +194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let peer_node_id = {
                                     let s = state.read().await;
                                     s.raft.peers.iter()
-                                        .find(|p| p.addr == to)
+                                        .find(|p| p.addr() == to)
                                         .map(|p| p.node_id.clone())
                                         .unwrap_or(to.clone())
                                 };
@@ -189,6 +214,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         resp.granted,
                                     );
                                     drop(s);
+                                    {
+                                        let s = state.read().await;
+                                        tracing::info!(node_id = s.raft.node_id.clone(), is_elected = resp.granted, "Election results");
+                                    }
+
 
                                     for append_entries_msg in append_entries_msgs {
                                         if let RaftMessage::AppendEntriesRequest { to, term, leader_id } = append_entries_msg {
@@ -211,7 +241,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let s = state.read().await;
                         s.raft.peers
                             .iter()
-                            .map(|peer| (peer.addr.clone(), s.raft.term, s.raft.node_id.clone()))
+                            .map(|peer| (peer.addr().clone(), s.raft.term, s.raft.node_id.clone()))
                             .collect::<Vec<_>>()
                     };
 

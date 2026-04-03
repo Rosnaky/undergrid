@@ -42,6 +42,7 @@ message RegisterResponse {
     bool accepted = 1;
     string cluster_id = 2;
     string leader_id = 3;
+    repeated NodeInfo peers = 4;
 }
 
 // Heartbeat
@@ -80,10 +81,21 @@ message AppendEntriesResponse {
     bool success = 2;
 }
 
+// Add Peer
+
+message AddPeerRequest {
+    NodeInfo peer_node_info = 1;
+}
+
+message AddPeerResponse {
+    bool success = 1;
+}
+
 service NodeAgent {
     rpc Ping (PingRequest) returns (PingResponse);
     rpc Register (RegisterRequest) returns (RegisterResponse);
     rpc Heartbeat (HeartbeatRequest) returns (HeartbeatResponse);
     rpc Vote (VoteRequest) returns (VoteResponse);
     rpc AppendEntries (AppendEntriesRequest) returns (AppendEntriesResponse);
+    rpc AddPeer (AddPeerRequest) returns (AddPeerResponse);
 }

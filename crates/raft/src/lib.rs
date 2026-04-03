@@ -12,7 +12,15 @@ pub enum Role {
 #[derive(Debug, Clone)]
 pub struct Peer {
     pub node_id: String,
-    pub addr: String,
+    pub hostname: String,
+    pub ip_address: String,
+    pub port: u32,
+}
+
+impl Peer {
+    pub fn addr(&self) -> String {
+        format!("http://{}:{}", self.ip_address, self.port)
+    }
 }
 
 pub struct RaftNode {
@@ -54,6 +62,9 @@ pub enum RaftMessage {
         term: u64,
         success: bool,
     },
+    AddPeerResponse {
+        success: bool
+    },
 }
 
 impl RaftNode {
@@ -74,7 +85,9 @@ impl RaftNode {
     }
 
     pub fn add_peer(&mut self, peer: Peer) {
-        self.peers.push(peer);
+        if !self.peers.iter().any(|p| p.node_id == peer.node_id) {
+            self.peers.push(peer);
+        }
     }
 
     pub fn should_start_election(&self) -> bool {
@@ -99,7 +112,7 @@ impl RaftNode {
         self.peers
             .iter()
             .map(|peer| RaftMessage::VoteRequest { 
-                to: peer.addr.clone(),
+                to: peer.addr().clone(),
                 term: self.term, 
                 candidate_id: self.node_id.clone(), 
             })
@@ -167,7 +180,7 @@ impl RaftNode {
             return self.peers
                 .iter()
                 .map(|peer| RaftMessage::AppendEntriesRequest { 
-                    to: peer.addr.clone(), 
+                    to: peer.addr().clone(), 
                     term: self.term, 
                     leader_id: self.node_id.clone(),
                 })
@@ -210,6 +223,16 @@ impl RaftNode {
             self.last_heartbeat = Instant::now();
             self.reset_election_timeout();
         }
+    }
+
+    pub fn handle_add_peer_request(&mut self, peer: Peer) -> RaftMessage {
+        self.add_peer(peer);
+
+        RaftMessage::AddPeerResponse { success: true }
+    }
+
+    pub fn handle_add_peer_response(&mut self, success: bool) {
+        let _ = success;
     }
 
     pub fn quorum(&self) -> usize {

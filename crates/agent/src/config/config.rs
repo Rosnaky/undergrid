@@ -15,15 +15,19 @@ pub struct NodeConfig {
 
 impl NodeConfig {
     /// Returns ~/.undergrid/config.toml
-    fn path() -> Result<PathBuf, ConfigError> {
+    fn path(port: u16) -> Result<PathBuf, ConfigError> {
         let home = dirs::home_dir()
             .ok_or_else(|| ConfigError::NoConfig("HOME directory not found".into()))?;
-        Ok(PathBuf::from(home).join(".undergrid").join("config.toml"))
+        Ok(
+            PathBuf::from(home)
+            .join(".undergrid")
+            .join(format!("config-{}.toml", port))
+        )
     }
 
     /// Read config file if it exists on disk
-    pub fn load() -> Result<Self, ConfigError> {
-        let path = Self::path()?;
+    pub fn load(port: u16) -> Result<Self, ConfigError> {
+        let path = Self::path(port)?;
 
         let config_toml = fs::read_to_string(&path)
             .map_err(|e| ConfigError::NoConfig(e.to_string()))?;
@@ -35,8 +39,8 @@ impl NodeConfig {
     }
 
     /// Create config file with defaults if it does not exist on disk
-    pub fn create() -> Result<Self, ConfigError> {
-        let path = Self::path()?;
+    pub fn create(port: u16) -> Result<Self, ConfigError> {
+        let path = Self::path(port)?;
 
         if path.exists() {
             return Err(ConfigError::ConfigAlreadyExists(
@@ -67,10 +71,10 @@ impl NodeConfig {
     }
 
     /// Load existing config, or create a new one if none exists
-    pub fn load_or_create() -> Result<Self, ConfigError> {
-        match Self::load() {
+    pub fn load_or_create(port: u16) -> Result<Self, ConfigError> {
+        match Self::load(port) {
             Ok(config) => Ok(config),
-            Err(ConfigError::NoConfig(_)) => Self::create(),
+            Err(ConfigError::NoConfig(_)) => Self::create(port),
             Err(e) => Err(e),
         }
     }

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use mesh::undergrid::{AppendEntriesRequest, AppendEntriesResponse, HeartbeatRequest, HeartbeatResponse, NodeInfo, RegisterRequest, RegisterResponse, ResourceSnapshot, VoteRequest, VoteResponse};
+use mesh::undergrid::{AddPeerRequest, AddPeerResponse, AppendEntriesRequest, AppendEntriesResponse, HeartbeatRequest, HeartbeatResponse, NodeInfo, RegisterRequest, RegisterResponse, ResourceSnapshot, VoteRequest, VoteResponse};
 use tokio::sync::RwLock;
 
 use crate::{client::{client_error::ClientError, client_pool::ClientPool}, state::NodeState};
@@ -107,6 +107,24 @@ pub async fn send_append_entries(
     };
 
     let response = client.append_entries(request)
+        .await
+        .map_err(|e| ClientError::QueryError(e.to_string()))?;
+
+    Ok(response.into_inner())
+}
+
+pub async fn add_peer(
+    pool: &ClientPool,
+    addr: &str,
+    peer_node_info: NodeInfo,
+) -> Result<AddPeerResponse, ClientError> {
+    let mut client = pool.get(addr).await?;
+
+    let request = AddPeerRequest {
+        peer_node_info: Some(peer_node_info),
+    };
+
+    let response = client.add_peer(request)
         .await
         .map_err(|e| ClientError::QueryError(e.to_string()))?;
 

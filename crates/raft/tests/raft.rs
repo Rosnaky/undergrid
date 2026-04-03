@@ -1,24 +1,29 @@
-use std::{collections::HashSet, time::Instant};
+use std::collections::HashSet;
+use std::time::Duration;
 
 use raft::{Peer, RaftMessage, RaftNode, Role};
+use std::time::Instant;
 
 // ── Helpers ──────────────────────────────────────────────
 
-fn node(id: &str, peers: Vec<(&str, &str)>) -> RaftNode {
-    RaftNode::new(
-        id.to_string(),
-        peers.into_iter().map(|(id, addr)| Peer {
-            node_id: id.to_string(),
-            addr: addr.to_string(),
-        }).collect(),
-    )
+fn peer(id: &str, ip: &str, port: u32) -> Peer {
+    Peer {
+        node_id: id.to_string(),
+        hostname: id.to_string(),
+        ip_address: ip.to_string(),
+        port,
+    }
+}
+
+fn node(id: &str, peers: Vec<Peer>) -> RaftNode {
+    RaftNode::new(id.to_string(), peers)
 }
 
 fn three_nodes() -> (RaftNode, RaftNode, RaftNode) {
     (
-        node("A", vec![("B", "http://B"), ("C", "http://C")]),
-        node("B", vec![("A", "http://A"), ("C", "http://C")]),
-        node("C", vec![("A", "http://A"), ("B", "http://B")]),
+        node("A", vec![peer("B", "B", 1), peer("C", "C", 2)]),
+        node("B", vec![peer("A", "A", 0), peer("C", "C", 2)]),
+        node("C", vec![peer("A", "A", 0), peer("B", "B", 1)]),
     )
 }
 
@@ -30,7 +35,7 @@ fn is_leader(n: &RaftNode) -> bool { matches!(n.role, Role::Leader) }
 
 #[test]
 fn new_node_starts_as_follower() {
-    let n = node("A", vec![("B", "http://B"), ("C", "http://C")]);
+    let n = node("A", vec![peer("B", "B", 1), peer("C", "C", 2)]);
     assert!(is_follower(&n));
     assert_eq!(n.term, 0);
     assert!(n.voted_for.is_none());
@@ -39,7 +44,7 @@ fn new_node_starts_as_follower() {
 
 #[test]
 fn start_election_transitions_to_candidate() {
-    let mut n = node("A", vec![("B", "http://B"), ("C", "http://C")]);
+    let mut n = node("A", vec![peer("B", "B", 1), peer("C", "C", 2)]);
     let msgs = n.start_election();
 
     assert!(is_candidate(&n));
@@ -61,7 +66,7 @@ fn single_node_wins_election_immediately() {
 
 #[test]
 fn start_election_sends_correct_vote_requests() {
-    let mut n = node("A", vec![("B", "http://B"), ("C", "http://C")]);
+    let mut n = node("A", vec![peer("B", "B", 1), peer("C", "C", 2)]);
     let msgs = n.start_election();
 
     for msg in &msgs {
@@ -78,15 +83,15 @@ fn start_election_sends_correct_vote_requests() {
         RaftMessage::VoteRequest { to, .. } => to.clone(),
         _ => unreachable!(),
     }).collect();
-    assert!(targets.contains("http://B"));
-    assert!(targets.contains("http://C"));
+    assert!(targets.contains("http://B:1"));
+    assert!(targets.contains("http://C:2"));
 }
 
 // ── Vote granting ───────────────────────────────────────
 
 #[test]
 fn follower_grants_vote_to_first_candidate() {
-    let mut n = node("B", vec![("A", "http://A"), ("C", "http://C")]);
+    let mut n = node("B", vec![peer("A", "A", 0), peer("C", "C", 2)]);
     let resp = n.handle_vote_request("A".to_string(), 1);
 
     match resp {
@@ -102,7 +107,7 @@ fn follower_grants_vote_to_first_candidate() {
 
 #[test]
 fn follower_rejects_second_candidate_same_term() {
-    let mut n = node("C", vec![("A", "http://A"), ("B", "http://B")]);
+    let mut n = node("C", vec![peer("A", "A", 0), peer("B", "B", 1)]);
     n.handle_vote_request("A".to_string(), 1);
 
     let resp = n.handle_vote_request("B".to_string(), 1);
@@ -118,7 +123,7 @@ fn follower_rejects_second_candidate_same_term() {
 
 #[test]
 fn follower_grants_vote_again_to_same_candidate() {
-    let mut n = node("B", vec![("A", "http://A"), ("C", "http://C")]);
+    let mut n = node("B", vec![peer("A", "A", 0), peer("C", "C", 2)]);
     n.handle_vote_request("A".to_string(), 1);
 
     let resp = n.handle_vote_request("A".to_string(), 1);
@@ -133,7 +138,7 @@ fn follower_grants_vote_again_to_same_candidate() {
 
 #[test]
 fn reject_vote_for_stale_term() {
-    let mut n = node("B", vec![("A", "http://A"), ("C", "http://C")]);
+    let mut n = node("B", vec![peer("A", "A", 0), peer("C", "C", 2)]);
     n.term = 5;
 
     let resp = n.handle_vote_request("A".to_string(), 3);
@@ -149,7 +154,7 @@ fn reject_vote_for_stale_term() {
 
 #[test]
 fn higher_term_vote_request_causes_step_down() {
-    let mut n = node("B", vec![("A", "http://A"), ("C", "http://C")]);
+    let mut n = node("B", vec![peer("A", "A", 0), peer("C", "C", 2)]);
     n.role = Role::Leader;
     n.term = 3;
     n.leader_id = Some("B".to_string());
@@ -172,7 +177,7 @@ fn higher_term_vote_request_causes_step_down() {
 
 #[test]
 fn candidate_becomes_leader_with_majority() {
-    let mut n = node("A", vec![("B", "http://B"), ("C", "http://C")]);
+    let mut n = node("A", vec![peer("B", "B", 1), peer("C", "C", 2)]);
     n.start_election();
 
     let msgs = n.handle_vote_response("B".to_string(), 1, true);
@@ -193,7 +198,10 @@ fn candidate_becomes_leader_with_majority() {
 
 #[test]
 fn candidate_does_not_become_leader_without_majority() {
-    let mut n = node("A", vec![("B", "http://B"), ("C", "http://C"), ("D", "http://D"), ("E", "http://E")]);
+    let mut n = node("A", vec![
+        peer("B", "B", 1), peer("C", "C", 2),
+        peer("D", "D", 3), peer("E", "E", 4),
+    ]);
     n.start_election();
 
     let msgs = n.handle_vote_response("B".to_string(), 1, true);
@@ -204,7 +212,7 @@ fn candidate_does_not_become_leader_without_majority() {
 
 #[test]
 fn candidate_steps_down_on_higher_term_in_vote_response() {
-    let mut n = node("A", vec![("B", "http://B"), ("C", "http://C")]);
+    let mut n = node("A", vec![peer("B", "B", 1), peer("C", "C", 2)]);
     n.start_election();
 
     let msgs = n.handle_vote_response("B".to_string(), 5, false);
@@ -218,7 +226,10 @@ fn candidate_steps_down_on_higher_term_in_vote_response() {
 
 #[test]
 fn duplicate_vote_from_same_node_does_not_double_count() {
-    let mut n = node("A", vec![("B", "http://B"), ("C", "http://C"), ("D", "http://D"), ("E", "http://E")]);
+    let mut n = node("A", vec![
+        peer("B", "B", 1), peer("C", "C", 2),
+        peer("D", "D", 3), peer("E", "E", 4),
+    ]);
     n.start_election();
 
     n.handle_vote_response("B".to_string(), 1, true);
@@ -230,8 +241,7 @@ fn duplicate_vote_from_same_node_does_not_double_count() {
 
 #[test]
 fn non_candidate_ignores_vote_response() {
-    let mut n = node("A", vec![("B", "http://B"), ("C", "http://C")]);
-    // n is a follower, never started an election
+    let mut n = node("A", vec![peer("B", "B", 1), peer("C", "C", 2)]);
     let msgs = n.handle_vote_response("B".to_string(), 1, true);
 
     assert!(is_follower(&n));
@@ -242,7 +252,7 @@ fn non_candidate_ignores_vote_response() {
 
 #[test]
 fn follower_accepts_append_entries_from_leader() {
-    let mut n = node("B", vec![("A", "http://A"), ("C", "http://C")]);
+    let mut n = node("B", vec![peer("A", "A", 0), peer("C", "C", 2)]);
 
     let resp = n.handle_append_entries_request("A".to_string(), 1);
 
@@ -260,7 +270,7 @@ fn follower_accepts_append_entries_from_leader() {
 
 #[test]
 fn reject_append_entries_from_stale_term() {
-    let mut n = node("B", vec![("A", "http://A"), ("C", "http://C")]);
+    let mut n = node("B", vec![peer("A", "A", 0), peer("C", "C", 2)]);
     n.term = 5;
 
     let resp = n.handle_append_entries_request("A".to_string(), 3);
@@ -276,7 +286,7 @@ fn reject_append_entries_from_stale_term() {
 
 #[test]
 fn candidate_steps_down_on_valid_append_entries() {
-    let mut n = node("B", vec![("A", "http://A"), ("C", "http://C")]);
+    let mut n = node("B", vec![peer("A", "A", 0), peer("C", "C", 2)]);
     n.start_election();
 
     let resp = n.handle_append_entries_request("A".to_string(), 1);
@@ -293,7 +303,7 @@ fn candidate_steps_down_on_valid_append_entries() {
 
 #[test]
 fn leader_steps_down_on_higher_term_append_entries() {
-    let mut n = node("A", vec![("B", "http://B"), ("C", "http://C")]);
+    let mut n = node("A", vec![peer("B", "B", 1), peer("C", "C", 2)]);
     n.role = Role::Leader;
     n.term = 3;
     n.leader_id = Some("A".to_string());
@@ -314,7 +324,7 @@ fn leader_steps_down_on_higher_term_append_entries() {
 
 #[test]
 fn accept_append_entries_from_new_leader() {
-    let mut n = node("C", vec![("A", "http://A"), ("B", "http://B")]);
+    let mut n = node("C", vec![peer("A", "A", 0), peer("B", "B", 1)]);
     n.term = 1;
     n.leader_id = Some("A".to_string());
 
@@ -334,13 +344,16 @@ fn accept_append_entries_from_new_leader() {
 
 #[test]
 fn quorum_3_nodes() {
-    let n = node("A", vec![("B", "http://B"), ("C", "http://C")]);
+    let n = node("A", vec![peer("B", "B", 1), peer("C", "C", 2)]);
     assert_eq!(n.quorum(), 2);
 }
 
 #[test]
 fn quorum_5_nodes() {
-    let n = node("A", vec![("B", "http://B"), ("C", "http://C"), ("D", "http://D"), ("E", "http://E")]);
+    let n = node("A", vec![
+        peer("B", "B", 1), peer("C", "C", 2),
+        peer("D", "D", 3), peer("E", "E", 4),
+    ]);
     assert_eq!(n.quorum(), 3);
 }
 
@@ -355,7 +368,7 @@ fn quorum_1_node() {
 #[test]
 fn election_timeout_in_valid_range() {
     for _ in 0..100 {
-        let n = node("A", vec![("B", "http://B")]);
+        let n = node("A", vec![peer("B", "B", 1)]);
         assert!(n.election_timeout_ms >= 150);
         assert!(n.election_timeout_ms <= 300);
     }
@@ -363,7 +376,7 @@ fn election_timeout_in_valid_range() {
 
 #[test]
 fn should_not_start_election_immediately() {
-    let n = node("A", vec![("B", "http://B")]);
+    let n = node("A", vec![peer("B", "B", 1)]);
     assert!(!n.should_start_election());
 }
 
@@ -378,19 +391,16 @@ fn full_election_scenario() {
     assert_eq!(a.term, 1);
 
     for msg in vote_requests {
-        match msg {
-            RaftMessage::VoteRequest { to, candidate_id, term } => {
-                let (voter_id, response) = if to == "http://B" {
-                    ("B".to_string(), b.handle_vote_request(candidate_id, term))
-                } else {
-                    ("C".to_string(), c.handle_vote_request(candidate_id, term))
-                };
+        if let RaftMessage::VoteRequest { to, candidate_id, term } = msg {
+            let (voter_id, response) = if to == "http://B:1" {
+                ("B".to_string(), b.handle_vote_request(candidate_id, term))
+            } else {
+                ("C".to_string(), c.handle_vote_request(candidate_id, term))
+            };
 
-                if let RaftMessage::VoteResponse { term, granted, .. } = response {
-                    a.handle_vote_response(voter_id, term, granted);
-                }
+            if let RaftMessage::VoteResponse { term, granted, .. } = response {
+                a.handle_vote_response(voter_id, term, granted);
             }
-            _ => panic!("Expected VoteRequest"),
         }
     }
 
@@ -407,10 +417,9 @@ fn full_election_with_split_vote() {
     let a_msgs = a.start_election();
     let b_msgs = b.start_election();
 
-    // C votes for A (first request it receives)
     for msg in a_msgs {
         if let RaftMessage::VoteRequest { to, candidate_id, term } = msg {
-            if to == "http://C" {
+            if to == "http://C:2" {
                 let resp = c.handle_vote_request(candidate_id, term);
                 if let RaftMessage::VoteResponse { term, granted, .. } = resp {
                     a.handle_vote_response("C".to_string(), term, granted);
@@ -419,10 +428,9 @@ fn full_election_with_split_vote() {
         }
     }
 
-    // C rejects B (already voted for A in this term)
     for msg in b_msgs {
         if let RaftMessage::VoteRequest { to, candidate_id, term } = msg {
-            if to == "http://C" {
+            if to == "http://C:2" {
                 let resp = c.handle_vote_request(candidate_id, term);
                 if let RaftMessage::VoteResponse { term, granted, .. } = resp {
                     b.handle_vote_response("C".to_string(), term, granted);
@@ -445,7 +453,7 @@ fn leader_sends_heartbeats_after_winning() {
 
     for msg in vote_requests {
         if let RaftMessage::VoteRequest { to, candidate_id, term } = msg {
-            let (voter_id, resp) = if to == "http://B" {
+            let (voter_id, resp) = if to == "http://B:1" {
                 ("B".to_string(), b.handle_vote_request(candidate_id, term))
             } else {
                 ("C".to_string(), c.handle_vote_request(candidate_id, term))
@@ -459,7 +467,7 @@ fn leader_sends_heartbeats_after_winning() {
                     for msg in &follow_up {
                         assert!(matches!(msg, RaftMessage::AppendEntriesRequest { .. }));
                     }
-                    break; // already won, stop processing votes
+                    break;
                 }
             }
         }
@@ -482,7 +490,7 @@ fn follower_recognizes_new_leader_via_append_entries() {
 
 #[test]
 fn append_entries_clears_voted_for() {
-    let mut n = node("B", vec![("A", "http://A"), ("C", "http://C")]);
+    let mut n = node("B", vec![peer("A", "A", 0), peer("C", "C", 2)]);
     n.voted_for = Some("C".to_string());
     n.term = 1;
 
@@ -493,7 +501,7 @@ fn append_entries_clears_voted_for() {
 
 #[test]
 fn append_entries_from_same_term_accepted() {
-    let mut n = node("B", vec![("A", "http://A")]);
+    let mut n = node("B", vec![peer("A", "A", 0)]);
     n.term = 3;
 
     let resp = n.handle_append_entries_request("A".to_string(), 3);
@@ -510,7 +518,7 @@ fn append_entries_from_same_term_accepted() {
 
 #[test]
 fn repeated_heartbeats_keep_follower_alive() {
-    let mut n = node("B", vec![("A", "http://A")]);
+    let mut n = node("B", vec![peer("A", "A", 0)]);
 
     for _ in 1..=5 {
         n.handle_append_entries_request("A".to_string(), 1);
@@ -522,7 +530,7 @@ fn repeated_heartbeats_keep_follower_alive() {
 
 #[test]
 fn leader_steps_down_when_response_has_higher_term() {
-    let mut n = node("A", vec![("B", "http://B"), ("C", "http://C")]);
+    let mut n = node("A", vec![peer("B", "B", 1), peer("C", "C", 2)]);
     n.role = Role::Leader;
     n.term = 3;
     n.leader_id = Some("A".to_string());
@@ -536,7 +544,7 @@ fn leader_steps_down_when_response_has_higher_term() {
 
 #[test]
 fn leader_stays_leader_on_same_term_response() {
-    let mut n = node("A", vec![("B", "http://B"), ("C", "http://C")]);
+    let mut n = node("A", vec![peer("B", "B", 1), peer("C", "C", 2)]);
     n.role = Role::Leader;
     n.term = 3;
     n.leader_id = Some("A".to_string());
@@ -549,7 +557,7 @@ fn leader_stays_leader_on_same_term_response() {
 
 #[test]
 fn leader_stays_leader_on_lower_term_response() {
-    let mut n = node("A", vec![("B", "http://B"), ("C", "http://C")]);
+    let mut n = node("A", vec![peer("B", "B", 1), peer("C", "C", 2)]);
     n.role = Role::Leader;
     n.term = 5;
     n.leader_id = Some("A".to_string());
@@ -562,18 +570,15 @@ fn leader_stays_leader_on_lower_term_response() {
 
 #[test]
 fn leader_change_via_append_entries() {
-    let mut n = node("C", vec![("A", "http://A"), ("B", "http://B")]);
+    let mut n = node("C", vec![peer("A", "A", 0), peer("B", "B", 1)]);
 
-    // A is leader in term 1
     n.handle_append_entries_request("A".to_string(), 1);
     assert_eq!(n.leader_id, Some("A".to_string()));
 
-    // B becomes leader in term 2
     n.handle_append_entries_request("B".to_string(), 2);
     assert_eq!(n.leader_id, Some("B".to_string()));
     assert_eq!(n.term, 2);
 
-    // A tries to send heartbeat with old term — rejected
     let resp = n.handle_append_entries_request("A".to_string(), 1);
     match resp {
         RaftMessage::AppendEntriesResponse { success, .. } => {
@@ -581,7 +586,6 @@ fn leader_change_via_append_entries() {
         }
         _ => panic!("Expected AppendEntriesResponse"),
     }
-    // Leader unchanged
     assert_eq!(n.leader_id, Some("B".to_string()));
 }
 
@@ -589,11 +593,10 @@ fn leader_change_via_append_entries() {
 fn full_heartbeat_cycle() {
     let (mut a, mut b, mut c) = three_nodes();
 
-    // A wins election
     let vote_requests = a.start_election();
     for msg in vote_requests {
         if let RaftMessage::VoteRequest { to, candidate_id, term } = msg {
-            let (voter_id, resp) = if to == "http://B" {
+            let (voter_id, resp) = if to == "http://B:1" {
                 ("B".to_string(), b.handle_vote_request(candidate_id, term))
             } else {
                 ("C".to_string(), c.handle_vote_request(candidate_id, term))
@@ -605,16 +608,15 @@ fn full_heartbeat_cycle() {
     }
     assert!(is_leader(&a));
 
-    // Leader sends heartbeats, followers respond
     let heartbeats: Vec<_> = a.peers.iter().map(|p| RaftMessage::AppendEntriesRequest {
-        to: p.addr.clone(),
+        to: p.addr(),
         term: a.term,
         leader_id: a.node_id.clone(),
     }).collect();
 
     for msg in heartbeats {
         if let RaftMessage::AppendEntriesRequest { to, term, leader_id } = msg {
-            let resp = if to == "http://B" {
+            let resp = if to == "http://B:1" {
                 b.handle_append_entries_request(leader_id, term)
             } else {
                 c.handle_append_entries_request(leader_id, term)
@@ -626,7 +628,6 @@ fn full_heartbeat_cycle() {
         }
     }
 
-    // Everyone agrees on the state
     assert!(is_leader(&a));
     assert!(is_follower(&b));
     assert!(is_follower(&c));
@@ -640,39 +641,33 @@ fn full_heartbeat_cycle() {
 
 #[test]
 fn election_clears_previous_votes() {
-    let mut n = node("A", vec![("B", "http://B"), ("C", "http://C")]);
-    n.start_election(); // term 1
-    // Election times out, start another
-    n.start_election(); // term 2
+    let mut n = node("A", vec![peer("B", "B", 1), peer("C", "C", 2)]);
+    n.start_election();
+    n.start_election();
 
     assert_eq!(n.term, 2);
-    assert_eq!(n.votes_received.len(), 1); // only self-vote, no stale votes
+    assert_eq!(n.votes_received.len(), 1);
     assert!(n.votes_received.contains("A"));
 }
 
 #[test]
 fn append_entries_resets_election_timer() {
-    let mut n = node("B", vec![("A", "http://A")]);
-    // Simulate time passing
-    n.last_heartbeat = Instant::now() - std::time::Duration::from_millis(200);
+    let mut n = node("B", vec![peer("A", "A", 0)]);
+    n.last_heartbeat = Instant::now() - Duration::from_millis(400);
     assert!(n.should_start_election());
 
-    // Receive heartbeat from leader
     n.handle_append_entries_request("A".to_string(), 1);
 
-    // Timer should be reset
     assert!(!n.should_start_election());
 }
 
 #[test]
 fn leader_ignores_stale_vote_response() {
-    let mut n = node("A", vec![("B", "http://B"), ("C", "http://C")]);
+    let mut n = node("A", vec![peer("B", "B", 1), peer("C", "C", 2)]);
     n.start_election();
-    // A wins with B's vote
     n.handle_vote_response("B".to_string(), 1, true);
     assert!(is_leader(&n));
 
-    // Late vote from C arrives — should be ignored (already leader)
     let msgs = n.handle_vote_response("C".to_string(), 1, true);
     assert!(is_leader(&n));
     assert!(msgs.is_empty());
@@ -680,20 +675,20 @@ fn leader_ignores_stale_vote_response() {
 
 #[test]
 fn rejected_vote_does_not_change_state() {
-    let mut n = node("A", vec![("B", "http://B"), ("C", "http://C")]);
+    let mut n = node("A", vec![peer("B", "B", 1), peer("C", "C", 2)]);
     n.start_election();
 
     let msgs = n.handle_vote_response("B".to_string(), 1, false);
 
     assert!(is_candidate(&n));
-    assert_eq!(n.votes_received.len(), 1); // only self-vote
+    assert_eq!(n.votes_received.len(), 1);
     assert!(msgs.is_empty());
 }
 
 #[test]
 fn two_node_cluster_elects_leader() {
-    let mut a = node("A", vec![("B", "http://B")]);
-    let mut b = node("B", vec![("A", "http://A")]);
+    let mut a = node("A", vec![peer("B", "B", 1)]);
+    let mut b = node("B", vec![peer("A", "A", 0)]);
 
     let msgs = a.start_election();
     assert_eq!(msgs.len(), 1);
@@ -713,21 +708,19 @@ fn two_node_cluster_elects_leader() {
 
 #[test]
 fn leader_steps_down_on_higher_term_vote_response() {
-    let mut n = node("A", vec![("B", "http://B"), ("C", "http://C")]);
+    let mut n = node("A", vec![peer("B", "B", 1), peer("C", "C", 2)]);
     n.role = Role::Leader;
     n.term = 3;
 
-    // Receives a vote response with a higher term (shouldn't happen normally, but must handle)
     let msgs = n.handle_vote_response("B".to_string(), 5, false);
 
-    // Not a candidate, so should be ignored entirely
     assert!(is_leader(&n));
     assert!(msgs.is_empty());
 }
 
 #[test]
 fn consecutive_elections_increment_term() {
-    let mut n = node("A", vec![("B", "http://B"), ("C", "http://C")]);
+    let mut n = node("A", vec![peer("B", "B", 1), peer("C", "C", 2)]);
     n.start_election();
     assert_eq!(n.term, 1);
 
@@ -740,7 +733,7 @@ fn consecutive_elections_increment_term() {
 
 #[test]
 fn follower_updates_term_on_higher_term_append_entries() {
-    let mut n = node("B", vec![("A", "http://A")]);
+    let mut n = node("B", vec![peer("A", "A", 0)]);
     assert_eq!(n.term, 0);
 
     n.handle_append_entries_request("A".to_string(), 5);
@@ -748,4 +741,43 @@ fn follower_updates_term_on_higher_term_append_entries() {
     assert_eq!(n.term, 5);
     assert!(is_follower(&n));
     assert_eq!(n.leader_id, Some("A".to_string()));
+}
+
+// ── Add peer ────────────────────────────────────────────
+
+#[test]
+fn add_peer_increases_peer_count() {
+    let mut n = node("A", vec![peer("B", "B", 1)]);
+    assert_eq!(n.peers.len(), 1);
+
+    n.handle_add_peer_request(peer("C", "C", 2));
+
+    assert_eq!(n.peers.len(), 2);
+    assert_eq!(n.peers[1].node_id, "C");
+}
+
+#[test]
+fn add_peer_returns_success() {
+    let mut n = node("A", vec![]);
+
+    let resp = n.handle_add_peer_request(peer("B", "B", 1));
+
+    match resp {
+        RaftMessage::AddPeerResponse { success } => {
+            assert!(success);
+        }
+        _ => panic!("Expected AddPeerResponse"),
+    }
+}
+
+#[test]
+fn add_peer_updates_quorum() {
+    let mut n = node("A", vec![]);
+    assert_eq!(n.quorum(), 1);
+
+    n.handle_add_peer_request(peer("B", "B", 1));
+    assert_eq!(n.quorum(), 2);
+
+    n.handle_add_peer_request(peer("C", "C", 2));
+    assert_eq!(n.quorum(), 2);
 }
