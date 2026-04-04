@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use mesh::undergrid::{AddPeerRequest, AddPeerResponse, AppendEntriesRequest, AppendEntriesResponse, HeartbeatRequest, HeartbeatResponse, NodeInfo, RegisterRequest, RegisterResponse, ResourceSnapshot, VoteRequest, VoteResponse};
+use mesh::undergrid::{AddPeerRequest, AddPeerResponse, AppendEntriesRequest, AppendEntriesResponse, HeartbeatRequest, HeartbeatResponse, NodeInfo, RegisterRequest, RegisterResponse, RemovePeerRequest, RemovePeerResponse, ResourceSnapshot, VoteRequest, VoteResponse};
 use tokio::sync::RwLock;
 
 use crate::{client::{client_error::ClientError, client_pool::ClientPool}, state::NodeState};
@@ -130,3 +130,22 @@ pub async fn add_peer(
 
     Ok(response.into_inner())
 }
+
+pub async fn remove_peer(
+    pool: &ClientPool,
+    addr: &str,
+    peer_node_id: String,
+) -> Result<RemovePeerResponse, ClientError> {
+    let mut client = pool.get(addr).await?;
+
+    let request = RemovePeerRequest {
+        peer_node_id,
+    };
+
+    let response = client.remove_peer(request)
+        .await
+        .map_err(|e| ClientError::QueryError(e.to_string()))?;
+
+    Ok(response.into_inner())
+}
+

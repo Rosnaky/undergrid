@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use raft::{Peer, RaftMessage, RaftNode, Role};
+use raft::{Peer, RaftMessage, RaftNode, Role, Status};
 use std::time::Instant;
 
 // ── Helpers ──────────────────────────────────────────────
@@ -12,6 +12,8 @@ fn peer(id: &str, ip: &str, port: u32) -> Peer {
         hostname: id.to_string(),
         ip_address: ip.to_string(),
         port,
+        last_seen: Instant::now(),
+        status: Status::Operational,
     }
 }
 

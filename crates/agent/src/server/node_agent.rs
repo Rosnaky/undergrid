@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
-use mesh::undergrid::{AddPeerRequest, AddPeerResponse, AppendEntriesRequest, AppendEntriesResponse, HeartbeatRequest, HeartbeatResponse, NodeInfo, PingRequest, PingResponse, RegisterRequest, RegisterResponse, ResourceSnapshot, VoteRequest, VoteResponse, node_agent_server::NodeAgent};
+use mesh::undergrid::{AddPeerRequest, AddPeerResponse, AppendEntriesRequest, AppendEntriesResponse, HeartbeatRequest, HeartbeatResponse, NodeInfo, PingRequest, PingResponse, RegisterRequest, RegisterResponse, RemovePeerRequest, RemovePeerResponse, ResourceSnapshot, VoteRequest, VoteResponse, node_agent_server::NodeAgent};
 use raft::RaftMessage;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
@@ -82,6 +82,8 @@ impl NodeAgent for NodeAgentService {
                 hostname: node_info.hostname.clone(),
                 ip_address: node_info.ip_address.clone(),
                 port: node_info.port,
+                last_seen: Instant::now(),
+                status: raft::Status::Operational,
             });
         }
 
@@ -220,6 +222,8 @@ impl NodeAgent for NodeAgentService {
             hostname: peer_info.hostname,
             ip_address: peer_info.ip_address,
             port: peer_info.port,
+            last_seen: Instant::now(),
+            status: raft::Status::Operational,
         });
 
         drop(state);
@@ -235,5 +239,31 @@ impl NodeAgent for NodeAgentService {
             _ => Err(Status::internal("Unexpected raft message type")),
         }
 
+    }
+
+    async fn remove_peer(
+        &self,
+        request: Request<RemovePeerRequest>,
+    ) -> Result<Response<RemovePeerResponse>, Status> {
+        let req = request.into_inner();
+
+        
+        let mut state = self.state.write().await;
+        let peer_node_id = req.peer_node_id;
+        
+        let resp = state.raft.handle_remove_peer_request(peer_node_id.clone());
+
+        drop(state);
+
+        tracing::info!(node_id = peer_node_id, "Received request to add peer node");
+
+        match resp {
+            RaftMessage::RemovePeerResponse { success } => {
+                Ok(Response::new(RemovePeerResponse {
+                    success,
+                }))
+            }
+            _ => Err(Status::internal("Unexpected raft message type")),
+        }
     }
 }

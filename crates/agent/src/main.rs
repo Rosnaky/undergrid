@@ -1,6 +1,6 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Instant};
 
-use agent::{client::{client::{register_with_leader, send_append_entries, send_heartbeat, send_vote_request}, client_pool::ClientPool}, config::config::NodeConfig, server::node_agent::NodeAgentService, state::NodeState, system::system::SystemSnapshot};
+use agent::{client::{client::{register_with_leader, send_append_entries, send_heartbeat, send_vote_request}, client_pool::ClientPool}, config::config::NodeConfig, defines::OFFLINE_TIMEOUT_MS, server::node_agent::NodeAgentService, state::NodeState, system::system::SystemSnapshot};
 use clap::Parser;
 use mesh::undergrid::node_agent_server::NodeAgentServer;
 use raft::{RaftMessage, Role};
@@ -84,6 +84,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         hostname: hostname.clone(),
                         ip_address: hostname.clone(),
                         port: port as u32,
+                        last_seen: Instant::now(),
+                        status: raft::Status::Operational,
                     });
 
                     for peer_info in resp.peers {
@@ -98,6 +100,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             hostname: peer_info.hostname,
                             ip_address: peer_info.ip_address,
                             port: peer_info.port,
+                            last_seen: Instant::now(),
+                            status: raft::Status::Operational,
                         });
                     }
 
@@ -237,6 +241,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 } // matches!(role, Role::Follower) || matches!(role, Role::Candidate)
                 else if matches!(role, Role::Leader) {
+                    // Check for offline nodes
+                    let mut s = state.write().await;
+                    let now = Instant::now();
+                    
+                    s.raft.handle_offline_timeout(now, OFFLINE_TIMEOUT_MS);
+
+                    // Send heartbeat requests
                     let heartbeat_msgs = {
                         let s = state.read().await;
                         s.raft.peers

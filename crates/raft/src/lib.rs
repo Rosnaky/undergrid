@@ -1,4 +1,4 @@
-use std::{collections::HashSet, time::Instant};
+use std::{collections::HashSet, time::{Duration, Instant}};
 
 use rand::RngExt;
 
@@ -10,11 +10,19 @@ pub enum Role {
 }
 
 #[derive(Debug, Clone)]
+pub enum Status {
+    Operational,
+    Offline,
+}
+
+#[derive(Debug, Clone)]
 pub struct Peer {
     pub node_id: String,
     pub hostname: String,
     pub ip_address: String,
     pub port: u32,
+    pub last_seen: Instant,
+    pub status: Status,
 }
 
 impl Peer {
@@ -63,7 +71,14 @@ pub enum RaftMessage {
         success: bool,
     },
     AddPeerResponse {
-        success: bool
+        success: bool,
+    },
+    RemovePeerRequest {
+        to: String,
+        peer_node_id: String,
+    },
+    RemovePeerResponse {
+        success: bool,
     },
 }
 
@@ -88,6 +103,39 @@ impl RaftNode {
         if !self.peers.iter().any(|p| p.node_id == peer.node_id) {
             self.peers.push(peer);
         }
+    }
+
+    pub fn remove_peer(&mut self, peer_node_id: String) {
+        self.peers.retain(|p| p.node_id != peer_node_id);
+    }
+
+    pub fn handle_offline_timeout(&mut self, now: Instant, timeout_ms: u64) -> Vec<RaftMessage> {
+        let offline_timeout = Duration::from_millis(timeout_ms);
+
+        let offline_node_ids: Vec<String> = self.peers.iter()
+            .filter(|peer| now.duration_since(peer.last_seen) >= offline_timeout)
+            .map(|peer| peer.node_id.clone())
+            .collect();
+
+        self.peers.retain(|peer| {
+            now.duration_since(peer.last_seen) < offline_timeout
+        });
+
+        self.peers
+            .iter()
+            .flat_map(|peer| {
+                offline_node_ids
+                    .iter()
+                    .map(|peer_node_id| {
+                        RaftMessage::RemovePeerRequest { 
+                            to: peer.addr(), 
+                            peer_node_id: peer_node_id.clone(), 
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+        
     }
 
     pub fn should_start_election(&self) -> bool {
@@ -120,6 +168,8 @@ impl RaftNode {
     }
 
     pub fn handle_vote_request(&mut self, candidate_id: String, candidate_term: u64) -> RaftMessage {
+        self.update_last_seen(candidate_id.clone());
+
         if candidate_term < self.term {
             return RaftMessage::VoteResponse { 
                 to: candidate_id.clone(), 
@@ -156,6 +206,8 @@ impl RaftNode {
     }
 
     pub fn handle_vote_response(&mut self, from_id: String, term: u64, granted: bool) -> Vec<RaftMessage> {
+        self.update_last_seen(from_id.clone());
+        
         if !matches!(self.role, Role::Candidate) {
             return vec![];
         }
@@ -191,6 +243,8 @@ impl RaftNode {
     }
 
     pub fn handle_append_entries_request(&mut self, leader_id: String, term: u64) -> RaftMessage {
+        self.update_last_seen(leader_id.clone());
+        
         if term < self.term
         {
             return RaftMessage::AppendEntriesResponse { 
@@ -235,6 +289,16 @@ impl RaftNode {
         let _ = success;
     }
 
+    pub fn handle_remove_peer_request(&mut self, peer_node_id: String) -> RaftMessage {
+        self.remove_peer(peer_node_id);
+
+        RaftMessage::RemovePeerResponse { success: true }
+    }
+
+    pub fn handle_remove_peer_response(&mut self, success: bool) {
+        let _ = success;
+    }
+
     pub fn quorum(&self) -> usize {
         (self.peers.len() + 1) / 2 + 1
     }
@@ -245,5 +309,11 @@ impl RaftNode {
         let mut rng = rand::rng();
 
         self.election_timeout_ms = rng.random_range(150..=300);
+    }
+
+    fn update_last_seen(&mut self, node_id: String) {
+        if let Some(peer) = self.peers.iter_mut().find(|p| p.node_id == node_id) {
+            peer.last_seen = Instant::now();
+        }
     }
 }

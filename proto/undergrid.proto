@@ -91,6 +91,16 @@ message AddPeerResponse {
     bool success = 1;
 }
 
+// Remove Peer
+
+message RemovePeerRequest {
+    string peer_node_id = 1;
+}
+
+message RemovePeerResponse {
+    bool success = 1;
+}
+
 service NodeAgent {
     rpc Ping (PingRequest) returns (PingResponse);
     rpc Register (RegisterRequest) returns (RegisterResponse);
@@ -98,4 +108,5 @@ service NodeAgent {
     rpc Vote (VoteRequest) returns (VoteResponse);
     rpc AppendEntries (AppendEntriesRequest) returns (AppendEntriesResponse);
     rpc AddPeer (AddPeerRequest) returns (AddPeerResponse);
+    rpc RemovePeer (RemovePeerRequest) returns (RemovePeerResponse);
 }
