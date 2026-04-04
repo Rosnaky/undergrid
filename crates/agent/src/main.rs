@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, sync::Arc, time::Instant};
 
-use agent::{client::{client::{register_with_leader, send_append_entries, send_heartbeat, send_vote_request}, client_pool::ClientPool}, config::config::NodeConfig, defines::OFFLINE_TIMEOUT_MS, server::node_agent::NodeAgentService, state::NodeState, system::system::SystemSnapshot};
+use agent::{client::{client::{remove_peer, send_append_entries, send_heartbeat, send_vote_request}, client_pool::ClientPool}, config::config::NodeConfig, defines::OFFLINE_TIMEOUT_MS, server::node_agent::NodeAgentService, state::NodeState, system::system::SystemSnapshot};
 use clap::Parser;
 use mesh::undergrid::node_agent_server::NodeAgentServer;
 use raft::{RaftMessage, Role};
@@ -66,58 +66,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Store initial system snapshot in state
     {
         let mut s = state.write().await;
-        s.last_snapshot = Some(system_snapshot);
+        s.last_snapshot = Some(system_snapshot.clone());
     }
 
     let client_pool = Arc::new(ClientPool::new());
 
     // Get client if it is not a leader node
-    if let Some(ref hostname) = args.join_hostname && let Some(port) = args.join_port {
-        let full_addr = format!("http://{}:{}", hostname, port);
-        match register_with_leader(&client_pool, &full_addr, &state).await {
-            Ok(resp) => {
-                if resp.accepted {
-                    let mut s = state.write().await;
-                    s.cluster_id = Some(resp.cluster_id);
-                    s.raft.add_peer(raft::Peer {
-                        node_id: resp.leader_id.clone(),
-                        hostname: hostname.clone(),
-                        ip_address: hostname.clone(),
-                        port: port as u32,
-                        last_seen: Instant::now(),
-                        status: raft::Status::Operational,
-                    });
-
-                    for peer_info in resp.peers {
-                        if peer_info.node_id == config.node_id || peer_info.node_id == resp.leader_id {
-                            continue;
-                        }
-
-                        tracing::info!(node_id = peer_info.node_id, "Added peer");
-
-                        s.raft.add_peer(raft::Peer {
-                            node_id: peer_info.node_id,
-                            hostname: peer_info.hostname,
-                            ip_address: peer_info.ip_address,
-                            port: peer_info.port,
-                            last_seen: Instant::now(),
-                            status: raft::Status::Operational,
-                        });
-                    }
-
-                    tracing::info!(node_id = resp.leader_id, "Registered with leader");
-                }
-            }
-            Err(e) => {
-                tracing::error!("Failed to register: {}", e);
-                std::process::exit(1);
-            }
-        }
-    };
-
     let addr: SocketAddr = format!("{}:{}", config.bind_address, config.port)
         .parse()
         .expect("Invalid bind address");
+
+    let _mdns = agent::discovery::advertise(
+        &config.node_id, 
+        &system_snapshot.hostname, 
+        config.port,
+    );
 
     let service = NodeAgentService::new(state.clone());
 
@@ -129,9 +92,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .serve(addr)
     );
 
+    let disc_state = Arc::clone(&state);
+    let disc_pool = Arc::clone(&client_pool);
+
     let mut interval = tokio::time::interval(
         std::time::Duration::from_millis(100),
     );
+
+    agent::discovery::discover_peers(disc_state, disc_pool);
 
     loop {
         tokio::select! {
@@ -218,11 +186,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         resp.granted,
                                     );
                                     drop(s);
-                                    {
-                                        let s = state.read().await;
-                                        tracing::info!(node_id = s.raft.node_id.clone(), is_elected = resp.granted, "Election results");
-                                    }
 
+                                    tracing::info!(is_elected = resp.granted, "Election results");
 
                                     for append_entries_msg in append_entries_msgs {
                                         if let RaftMessage::AppendEntriesRequest { to, term, leader_id } = append_entries_msg {
@@ -242,10 +207,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } // matches!(role, Role::Follower) || matches!(role, Role::Candidate)
                 else if matches!(role, Role::Leader) {
                     // Check for offline nodes
-                    let mut s = state.write().await;
-                    let now = Instant::now();
-                    
-                    s.raft.handle_offline_timeout(now, OFFLINE_TIMEOUT_MS);
+                    let remove_peer_msgs = {
+                        let mut s = state.write().await;
+                        s.raft.handle_offline_timeout(Instant::now(), OFFLINE_TIMEOUT_MS)
+                    };
+
+                    let mut remove_peer_futures = vec![];
+                    for msg in remove_peer_msgs {
+                        if let RaftMessage::RemovePeerRequest { to, peer_node_id } = msg {
+                            let pool = Arc::clone(&client_pool);
+                            remove_peer_futures.push(tokio::spawn(async move {
+                                (to.clone(), remove_peer(&pool, &to, peer_node_id).await)
+                            }));
+                        }
+                    }
+
+                    for handle in remove_peer_futures {
+                        match handle.await {
+                            Ok((_, Ok(resp))) => {
+                                let mut s = state.write().await;
+                                s.raft.handle_remove_peer_response(resp.success);
+                            }
+                            Ok((to, Err(e))) => {
+                                tracing::warn!(peer = %to, "RemovePeer failed: {}", e);
+                            }
+                            Err(e) => {
+                                tracing::warn!("RemovePeer task panicked: {}", e);
+                            }
+                        }
+                    }
 
                     // Send heartbeat requests
                     let heartbeat_msgs = {

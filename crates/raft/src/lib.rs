@@ -100,13 +100,21 @@ impl RaftNode {
     }
 
     pub fn add_peer(&mut self, peer: Peer) {
-        if !self.peers.iter().any(|p| p.node_id == peer.node_id) {
+        if !self.is_peer_by_node_id(&peer.node_id) {
             self.peers.push(peer);
         }
     }
 
-    pub fn remove_peer(&mut self, peer_node_id: String) {
+    pub fn remove_peer(&mut self, peer_node_id: &str) {
         self.peers.retain(|p| p.node_id != peer_node_id);
+    }
+
+    pub fn is_peer_by_node_id(&self, peer_node_id: &str) -> bool {
+        self.peers.iter().any(|peer| peer.node_id == peer_node_id)
+    }
+
+    pub fn is_peer_by_addr(&self, addr: &str) -> bool {
+        self.peers.iter().any(|peer| peer.addr() == addr)
     }
 
     pub fn handle_offline_timeout(&mut self, now: Instant, timeout_ms: u64) -> Vec<RaftMessage> {
@@ -290,7 +298,7 @@ impl RaftNode {
     }
 
     pub fn handle_remove_peer_request(&mut self, peer_node_id: String) -> RaftMessage {
-        self.remove_peer(peer_node_id);
+        self.remove_peer(&peer_node_id);
 
         RaftMessage::RemovePeerResponse { success: true }
     }

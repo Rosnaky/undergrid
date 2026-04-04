@@ -50,7 +50,7 @@ impl NodeAgent for NodeAgentService {
         tracing::info!(
             peer_node_id = %node_info.node_id, 
             hostname = %node_info.hostname, 
-            "Registered node"
+            "Registering node"
         );
         
         let state = self.state.read().await;

@@ -3,4 +3,5 @@ pub mod config;
 pub mod server;
 pub mod system;
 pub mod defines;
+pub mod discovery;
 pub mod state;
