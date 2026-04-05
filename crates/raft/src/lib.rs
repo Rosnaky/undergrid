@@ -125,9 +125,15 @@ impl RaftNode {
             .map(|peer| peer.node_id.clone())
             .collect();
 
+        let original_peer_count = self.peers.len();
+
         self.peers.retain(|peer| {
             now.duration_since(peer.last_seen) < offline_timeout
         });
+
+        if original_peer_count != self.peers.len() {
+            self.step_down_to_follower();
+        }
 
         self.peers
             .iter()
@@ -188,9 +194,8 @@ impl RaftNode {
         }
 
         if candidate_term > self.term {
+            self.step_down_to_follower();
             self.term = candidate_term;
-            self.role = Role::Follower;
-            self.voted_for = None;
             self.leader_id = None;
         }
         
@@ -263,13 +268,10 @@ impl RaftNode {
             }
         }
 
+        self.step_down_to_follower();
         self.term = term;
-        self.role = Role::Follower;
         self.leader_id = Some(leader_id.clone());
-        self.voted_for = None;
-        self.last_heartbeat = Instant::now();
-        self.reset_election_timeout();
-
+        
         RaftMessage::AppendEntriesResponse { 
             to: leader_id.clone(), 
             term, 
@@ -281,10 +283,7 @@ impl RaftNode {
         let _ = success;
         if term > self.term {
             self.term = term;
-            self.role = Role::Follower;
-            self.voted_for = None;
-            self.last_heartbeat = Instant::now();
-            self.reset_election_timeout();
+            self.step_down_to_follower();
         }
     }
 
@@ -313,6 +312,13 @@ impl RaftNode {
     }
         
     // Private functions
+
+    fn step_down_to_follower(&mut self) {
+        self.role = Role::Follower;
+        self.voted_for = None;
+        self.last_heartbeat = Instant::now();
+        self.reset_election_timeout();
+    }
 
     fn reset_election_timeout(&mut self) {
         let mut rng = rand::rng();

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use mesh::undergrid::{AddPeerRequest, AddPeerResponse, AppendEntriesRequest, AppendEntriesResponse, HeartbeatRequest, HeartbeatResponse, NodeInfo, RegisterRequest, RegisterResponse, RemovePeerRequest, RemovePeerResponse, ResourceSnapshot, VoteRequest, VoteResponse};
 use tokio::sync::RwLock;
 
-use crate::{client::{client_error::ClientError, client_pool::ClientPool}, state::NodeState};
+use crate::{client::{client_error::ClientError, client_pool::ClientPool}, node::state::NodeState};
 
 
 pub async fn register_with_leader(

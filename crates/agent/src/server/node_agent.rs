@@ -5,7 +5,7 @@ use raft::RaftMessage;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
-use crate::{client::{client::add_peer, client_pool::ClientPool}, state::NodeState};
+use crate::{client::{client::add_peer, client_pool::ClientPool}, node::state::NodeState};
 
 
 pub struct NodeAgentService {

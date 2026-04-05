@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Instant};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use tokio::sync::RwLock;
 
-use crate::{client::{client::register_with_leader, client_pool::ClientPool}, state::NodeState};
+use crate::{client::{client::register_with_leader, client_pool::ClientPool}, node::state::NodeState};
 
 pub fn advertise(node_id: &str, hostname: &str, port: u16) -> ServiceDaemon {
     let mdns = ServiceDaemon::new().expect("Failed to create mDNS daemon");
