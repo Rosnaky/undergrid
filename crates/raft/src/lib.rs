@@ -100,7 +100,7 @@ impl RaftNode {
     }
 
     pub fn add_peer(&mut self, peer: Peer) {
-        if !self.is_peer_by_node_id(&peer.node_id) {
+        if !self.is_peer_by_node_id(&peer.node_id) && peer.node_id != self.node_id {
             self.peers.push(peer);
         }
     }
@@ -154,6 +154,7 @@ impl RaftNode {
         self.role = Role::Candidate;
         self.term += 1;
         self.voted_for = Some(self.node_id.clone());
+        self.votes_received.clear();
         self.votes_received.insert(self.node_id.clone());
         self.last_heartbeat = Instant::now();
         self.reset_election_timeout();

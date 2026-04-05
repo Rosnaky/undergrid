@@ -95,50 +95,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let disc_state = Arc::clone(&state);
     let disc_pool = Arc::clone(&client_pool);
 
-    let mut interval = tokio::time::interval(
-        std::time::Duration::from_millis(100),
+    let mut raft_interval = tokio::time::interval(
+        std::time::Duration::from_millis(10),
+    );
+
+    let mut monitor_interval = tokio::time::interval(
+        std::time::Duration::from_secs(5),
+    );
+
+    let mut heartbeat_interval = tokio::time::interval(
+        std::time::Duration::from_millis(500),
     );
 
     agent::discovery::discover_peers(disc_state, disc_pool);
 
     loop {
         tokio::select! {
-            _ = interval.tick() => {
+            _ = monitor_interval.tick() => {
                 match SystemSnapshot::collect() {
                     Ok(snapshot) => {
                         let mut s = heartbeat_state.write().await;
                         s.last_snapshot = Some(snapshot.clone());
-                        drop(s);
-
-                        {
-                            
-                            let leader_addr = {
-                                let s = state.read().await;
-                                s.raft.leader_id.as_ref().and_then(|lid| {
-                                    s.raft.peers.iter().find(|p| &p.node_id == lid).map(|p| p.addr().clone())
-                                })
-                            };
-
-                            if let Some(addr) = leader_addr {
-                                match send_heartbeat(&client_pool, &addr, &heartbeat_state).await {
-                                    Ok(_) => tracing::debug!("Heartbeat sent"),
-                                    Err(e) => tracing::warn!("Heartbeat failed: {}", e),
-                                }
-                            }
-                            else {
-                                tracing::debug!(
-                                    cpu_cores = snapshot.cpu.cpu_cores,
-                                    "Heartbeat tick (local)"
-                                )
-                            }
-                        }
                     },
                     Err(e) => {
                         tracing::error!("Failed to get system snapshot: {}", e);
                         break;
                     }
                 };
+            }
+            _ = heartbeat_interval.tick() => {
+                let role = {
+                    let s = state.read().await;
+                    s.raft.role.clone()
+                };
 
+                if matches!(role, Role::Follower) {
+                    let leader_addr = {
+                        let s = state.read().await;
+                        s.raft.leader_id.as_ref().and_then(|lid| {
+                            s.raft.peers.iter().find(|p| &p.node_id == lid).map(|p| p.addr().clone())
+                        })
+                    };
+
+                    if let Some(addr) = leader_addr {
+                        match send_heartbeat(&client_pool, &addr, &heartbeat_state).await {
+                            Ok(_) => tracing::debug!("Heartbeat sent"),
+                            Err(e) => tracing::warn!("Heartbeat failed: {}", e),
+                        }
+                    }
+                }
+            }
+            _ = raft_interval.tick() => {
+            
                 let role = {
                     let s = state.read().await;
                     s.raft.role.clone()
@@ -152,7 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if should_start_election {
                         {
                             let s = state.read().await;
-                            tracing::info!(node_id = s.raft.node_id.clone(), term = s.raft.term, "Starting election");
+                            tracing::info!(term = s.raft.term, "Starting election");
                         }
                         let election_msgs = {
                             let mut s = state.write().await;
