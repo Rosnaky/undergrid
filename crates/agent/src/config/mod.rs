@@ -1,6 +1,6 @@
 pub mod config_error;
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -20,19 +20,17 @@ impl NodeConfig {
     fn path(port: u16) -> Result<PathBuf, ConfigError> {
         let home = dirs::home_dir()
             .ok_or_else(|| ConfigError::NoConfig("HOME directory not found".into()))?;
-        Ok(
-            home
+        Ok(home
             .join(".undergrid")
-            .join(format!("config-{}.toml", port))
-        )
+            .join(format!("config-{}.toml", port)))
     }
 
     /// Read config file if it exists on disk
     pub fn load(port: u16) -> Result<Self, ConfigError> {
         let path = Self::path(port)?;
 
-        let config_toml = fs::read_to_string(&path)
-            .map_err(|e| ConfigError::NoConfig(e.to_string()))?;
+        let config_toml =
+            fs::read_to_string(&path).map_err(|e| ConfigError::NoConfig(e.to_string()))?;
 
         let config: NodeConfig = toml::from_str(&config_toml)
             .map_err(|e| ConfigError::SerializationError(e.to_string()))?;
@@ -45,9 +43,7 @@ impl NodeConfig {
         let path = Self::path(port)?;
 
         if path.exists() {
-            return Err(ConfigError::ConfigAlreadyExists(
-                path.display().to_string(),
-            ));
+            return Err(ConfigError::ConfigAlreadyExists(path.display().to_string()));
         }
 
         let config = NodeConfig {

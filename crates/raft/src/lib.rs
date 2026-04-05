@@ -1,4 +1,7 @@
-use std::{collections::HashSet, time::{Duration, Instant}};
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant},
+};
 
 use rand::RngExt;
 
@@ -121,30 +124,28 @@ impl RaftNode {
     pub fn handle_offline_timeout(&mut self, now: Instant, timeout_ms: u64) -> Vec<RaftMessage> {
         let offline_timeout = Duration::from_millis(timeout_ms);
 
-        let offline_node_ids: Vec<String> = self.peers.iter()
+        let offline_node_ids: Vec<String> = self
+            .peers
+            .iter()
             .filter(|peer| now.duration_since(peer.last_seen) >= offline_timeout)
             .map(|peer| peer.node_id.clone())
             .collect();
 
-        self.peers.retain(|peer| {
-            now.duration_since(peer.last_seen) < offline_timeout
-        });
+        self.peers
+            .retain(|peer| now.duration_since(peer.last_seen) < offline_timeout);
 
         self.peers
             .iter()
             .flat_map(|peer| {
                 offline_node_ids
                     .iter()
-                    .map(|peer_node_id| {
-                        RaftMessage::RemovePeerRequest { 
-                            to: peer.addr(), 
-                            peer_node_id: peer_node_id.clone(), 
-                        }
+                    .map(|peer_node_id| RaftMessage::RemovePeerRequest {
+                        to: peer.addr(),
+                        peer_node_id: peer_node_id.clone(),
                     })
                     .collect::<Vec<_>>()
             })
             .collect()
-        
     }
 
     pub fn should_start_election(&self) -> bool {
@@ -169,10 +170,10 @@ impl RaftNode {
 
         self.peers
             .iter()
-            .map(|peer| RaftMessage::VoteRequest { 
+            .map(|peer| RaftMessage::VoteRequest {
                 to: peer.addr().clone(),
-                term: self.term, 
-                candidate_id: self.node_id.clone(), 
+                term: self.term,
+                candidate_id: self.node_id.clone(),
             })
             .collect()
     }
@@ -181,15 +182,19 @@ impl RaftNode {
         self.update_last_seen(node_id);
     }
 
-    pub fn handle_vote_request(&mut self, candidate_id: String, candidate_term: u64) -> RaftMessage {
+    pub fn handle_vote_request(
+        &mut self,
+        candidate_id: String,
+        candidate_term: u64,
+    ) -> RaftMessage {
         self.update_last_seen(candidate_id.clone());
 
         if candidate_term < self.term {
-            return RaftMessage::VoteResponse { 
-                to: candidate_id.clone(), 
-                term: self.term, 
-                granted: false 
-            }
+            return RaftMessage::VoteResponse {
+                to: candidate_id.clone(),
+                term: self.term,
+                granted: false,
+            };
         }
 
         if candidate_term > self.term {
@@ -197,30 +202,33 @@ impl RaftNode {
             self.term = candidate_term;
             self.leader_id = None;
         }
-        
-        if self.voted_for.is_none() ||
-            self.voted_for.as_ref() == Some(&candidate_id) 
-        {
+
+        if self.voted_for.is_none() || self.voted_for.as_ref() == Some(&candidate_id) {
             self.voted_for = Some(candidate_id.clone());
             self.reset_election_timeout();
             self.last_heartbeat = Instant::now();
-            return RaftMessage::VoteResponse { 
-                to: candidate_id.clone(), 
-                term: self.term, 
+            return RaftMessage::VoteResponse {
+                to: candidate_id.clone(),
+                term: self.term,
                 granted: true,
-            }
+            };
         }
 
-        RaftMessage::VoteResponse { 
-            to: candidate_id.clone(), 
-            term: self.term, 
-            granted: false 
+        RaftMessage::VoteResponse {
+            to: candidate_id.clone(),
+            term: self.term,
+            granted: false,
         }
     }
 
-    pub fn handle_vote_response(&mut self, from_id: String, term: u64, granted: bool) -> Vec<RaftMessage> {
+    pub fn handle_vote_response(
+        &mut self,
+        from_id: String,
+        term: u64,
+        granted: bool,
+    ) -> Vec<RaftMessage> {
         self.update_last_seen(from_id.clone());
-        
+
         if !matches!(self.role, Role::Candidate) {
             return vec![];
         }
@@ -232,7 +240,7 @@ impl RaftNode {
             self.votes_received.clear();
             return vec![];
         }
-        
+
         if !granted {
             return vec![];
         }
@@ -242,14 +250,15 @@ impl RaftNode {
             self.role = Role::Leader;
             self.leader_id = Some(self.node_id.clone());
 
-            return self.peers
+            return self
+                .peers
                 .iter()
-                .map(|peer| RaftMessage::AppendEntriesRequest { 
-                    to: peer.addr().clone(), 
-                    term: self.term, 
+                .map(|peer| RaftMessage::AppendEntriesRequest {
+                    to: peer.addr().clone(),
+                    term: self.term,
                     leader_id: self.node_id.clone(),
                 })
-                .collect()
+                .collect();
         }
 
         vec![]
@@ -257,26 +266,25 @@ impl RaftNode {
 
     pub fn handle_append_entries_request(&mut self, leader_id: String, term: u64) -> RaftMessage {
         self.update_last_seen(leader_id.clone());
-        
-        if term < self.term
-        {
-            return RaftMessage::AppendEntriesResponse { 
-                to: leader_id.clone(), 
+
+        if term < self.term {
+            return RaftMessage::AppendEntriesResponse {
+                to: leader_id.clone(),
                 from: self.node_id.clone(),
-                term: self.term, 
+                term: self.term,
                 success: false,
-            }
+            };
         }
 
         self.step_down_to_follower();
         self.term = term;
         self.leader_id = Some(leader_id.clone());
-        
-        RaftMessage::AppendEntriesResponse { 
-            to: leader_id.clone(), 
+
+        RaftMessage::AppendEntriesResponse {
+            to: leader_id.clone(),
             from: self.node_id.clone(),
-            term, 
-            success: true 
+            term,
+            success: true,
         }
     }
 
@@ -312,7 +320,7 @@ impl RaftNode {
     pub fn quorum(&self) -> usize {
         self.peers.len().div_ceil(2) + 1
     }
-        
+
     // Private functions
 
     fn step_down_to_follower(&mut self) {

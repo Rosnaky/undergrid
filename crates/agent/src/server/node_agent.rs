@@ -1,12 +1,19 @@
 use std::{sync::Arc, time::Instant};
 
-use mesh::undergrid::{AddPeerRequest, AddPeerResponse, AppendEntriesRequest, AppendEntriesResponse, HeartbeatRequest, HeartbeatResponse, NodeInfo, PingRequest, PingResponse, RegisterRequest, RegisterResponse, RemovePeerRequest, RemovePeerResponse, ResourceSnapshot, VoteRequest, VoteResponse, node_agent_server::NodeAgent};
+use mesh::undergrid::{
+    AddPeerRequest, AddPeerResponse, AppendEntriesRequest, AppendEntriesResponse, HeartbeatRequest,
+    HeartbeatResponse, NodeInfo, PingRequest, PingResponse, RegisterRequest, RegisterResponse,
+    RemovePeerRequest, RemovePeerResponse, ResourceSnapshot, VoteRequest, VoteResponse,
+    node_agent_server::NodeAgent,
+};
 use raft::RaftMessage;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
-use crate::{client::{add_peer, client_pool::ClientPool}, node::state::NodeState};
-
+use crate::{
+    client::{add_peer, client_pool::ClientPool},
+    node::state::NodeState,
+};
 
 pub struct NodeAgentService {
     state: Arc<RwLock<NodeState>>,
@@ -24,10 +31,7 @@ impl NodeAgentService {
 
 #[tonic::async_trait]
 impl NodeAgent for NodeAgentService {
-    async fn ping(
-        &self,
-        request: Request<PingRequest>,
-    ) -> Result<Response<PingResponse>, Status> {
+    async fn ping(&self, request: Request<PingRequest>) -> Result<Response<PingResponse>, Status> {
         let req = request.into_inner();
         let state = self.state.read().await;
 
@@ -44,15 +48,16 @@ impl NodeAgent for NodeAgentService {
         request: Request<RegisterRequest>,
     ) -> Result<Response<RegisterResponse>, Status> {
         let req = request.into_inner();
-        let node_info = req.node_info
+        let node_info = req
+            .node_info
             .ok_or_else(|| Status::invalid_argument("Missing node_info"))?;
 
         tracing::info!(
-            peer_node_id = %node_info.node_id, 
-            hostname = %node_info.hostname, 
+            peer_node_id = %node_info.node_id,
+            hostname = %node_info.hostname,
             "Registering node"
         );
-        
+
         let state = self.state.read().await;
         let existing_peers = state.raft.peers.clone();
         let peer_node_info = NodeInfo {
@@ -67,9 +72,9 @@ impl NodeAgent for NodeAgentService {
                     memory_total_bytes: s.memory.memory_total_bytes,
                     memory_available_bytes: s.memory.memory_available_bytes,
                     disk_total_bytes: s.disk.disk_total_bytes,
-                    disk_available_bytes: s.disk.disk_available_bytes
+                    disk_available_bytes: s.disk.disk_available_bytes,
                 }),
-                _ => None
+                _ => None,
             },
         };
         drop(state);
@@ -89,8 +94,10 @@ impl NodeAgent for NodeAgentService {
 
         let peer_list = {
             let state = self.state.read().await;
-            let mut peers: Vec<NodeInfo> = state.raft.peers.
-                iter()
+            let mut peers: Vec<NodeInfo> = state
+                .raft
+                .peers
+                .iter()
                 .map(|p| NodeInfo {
                     node_id: p.node_id.clone(),
                     hostname: p.hostname.clone(),
@@ -101,10 +108,9 @@ impl NodeAgent for NodeAgentService {
                 .collect();
 
             peers.push(peer_node_info.clone());
-            
+
             peers
         };
-
 
         let state = self.state.read().await;
         let pool_clone = self.client_pool.clone();
@@ -143,15 +149,10 @@ impl NodeAgent for NodeAgentService {
         s.raft.handle_heartbeat_response(req.node_id);
         drop(s);
 
-        Ok(Response::new(HeartbeatResponse {
-            acknowledged: true,
-        }))
+        Ok(Response::new(HeartbeatResponse { acknowledged: true }))
     }
 
-    async fn vote(
-        &self,
-        request: Request<VoteRequest>,
-    ) -> Result<Response<VoteResponse>, Status> {
+    async fn vote(&self, request: Request<VoteRequest>) -> Result<Response<VoteResponse>, Status> {
         let req = request.into_inner();
 
         tracing::debug!(
@@ -161,23 +162,16 @@ impl NodeAgent for NodeAgentService {
         );
 
         let mut state = self.state.write().await;
-        let resp: RaftMessage = state.raft.handle_vote_request(
-            req.candidate_id, req.term
-        );
+        let resp: RaftMessage = state.raft.handle_vote_request(req.candidate_id, req.term);
 
         drop(state);
 
         match resp {
             RaftMessage::VoteResponse { term, granted, .. } => {
-                Ok(Response::new(VoteResponse {
-                    term,
-                    granted,
-                }))
+                Ok(Response::new(VoteResponse { term, granted }))
             }
             _ => Err(Status::internal("Unexpected raft message type")),
         }
-        
-        
     }
 
     async fn append_entries(
@@ -193,20 +187,23 @@ impl NodeAgent for NodeAgentService {
         );
 
         let mut state = self.state.write().await;
-        let resp: RaftMessage = state.raft.handle_append_entries_request(
-            req.leader_id, req.term
-        );
+        let resp: RaftMessage = state
+            .raft
+            .handle_append_entries_request(req.leader_id, req.term);
 
         drop(state);
 
         match resp {
-            RaftMessage::AppendEntriesResponse { term, success, from, .. } => {
-                Ok(Response::new(AppendEntriesResponse {
-                    node_id: from,
-                    term,
-                    success,
-                }))
-            }
+            RaftMessage::AppendEntriesResponse {
+                term,
+                success,
+                from,
+                ..
+            } => Ok(Response::new(AppendEntriesResponse {
+                node_id: from,
+                term,
+                success,
+            })),
             _ => Err(Status::internal("Unexpected raft message type")),
         }
     }
@@ -217,11 +214,11 @@ impl NodeAgent for NodeAgentService {
     ) -> Result<Response<AddPeerResponse>, Status> {
         let req = request.into_inner();
 
-        
         let mut state = self.state.write().await;
-        let peer_info = req.peer_node_info
+        let peer_info = req
+            .peer_node_info
             .ok_or_else(|| Status::invalid_argument("Missing peer_node_info"))?;
-        
+
         let resp = state.raft.handle_add_peer_request(raft::Peer {
             node_id: peer_info.node_id.clone(),
             hostname: peer_info.hostname,
@@ -233,17 +230,17 @@ impl NodeAgent for NodeAgentService {
 
         drop(state);
 
-        tracing::info!(node_id = peer_info.node_id, "Received request to add peer node");
+        tracing::info!(
+            node_id = peer_info.node_id,
+            "Received request to add peer node"
+        );
 
         match resp {
             RaftMessage::AddPeerResponse { success } => {
-                Ok(Response::new(AddPeerResponse {
-                    success,
-                }))
+                Ok(Response::new(AddPeerResponse { success }))
             }
             _ => Err(Status::internal("Unexpected raft message type")),
         }
-
     }
 
     async fn remove_peer(
@@ -252,21 +249,21 @@ impl NodeAgent for NodeAgentService {
     ) -> Result<Response<RemovePeerResponse>, Status> {
         let req = request.into_inner();
 
-        
         let mut state = self.state.write().await;
         let peer_node_id = req.peer_node_id;
-        
+
         let resp = state.raft.handle_remove_peer_request(peer_node_id.clone());
 
         drop(state);
 
-        tracing::info!(node_id = peer_node_id, "Received request to remove peer node");
+        tracing::info!(
+            node_id = peer_node_id,
+            "Received request to remove peer node"
+        );
 
         match resp {
             RaftMessage::RemovePeerResponse { success } => {
-                Ok(Response::new(RemovePeerResponse {
-                    success,
-                }))
+                Ok(Response::new(RemovePeerResponse { success }))
             }
             _ => Err(Status::internal("Unexpected raft message type")),
         }

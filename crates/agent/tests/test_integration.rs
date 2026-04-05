@@ -1,14 +1,14 @@
+use agent::defines::OFFLINE_TIMEOUT_MS;
+use raft::Peer;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
-use agent::defines::OFFLINE_TIMEOUT_MS;
-use raft::Peer;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 
-use agent::server::node_agent::NodeAgentService;
-use agent::node::state::NodeState;
 use agent::client::client_pool::ClientPool;
+use agent::node::state::NodeState;
+use agent::server::node_agent::NodeAgentService;
 use mesh::undergrid::node_agent_server::NodeAgentServer;
 
 // ── Port Allocator ───────────────────────────────────────
@@ -49,7 +49,6 @@ struct TestNode {
     node_id: String,
 }
 
-
 async fn start_node(id: &str, port: u16) -> TestNode {
     let state = Arc::new(RwLock::new(NodeState::new(
         id.to_string(),
@@ -68,7 +67,7 @@ async fn start_node(id: &str, port: u16) -> TestNode {
             .add_service(NodeAgentServer::new(service))
             .serve_with_shutdown(addr, async {
                 let _ = shutdown_rx.await;
-            })
+            }),
     );
 
     sleep(Duration::from_millis(200)).await;
@@ -113,11 +112,7 @@ async fn wire_peers(nodes: &[&TestNode]) {
 
 // ── Raft Tick Runner ─────────────────────────────────────
 
-async fn run_raft_ticks(
-    nodes: &[&Arc<RwLock<NodeState>>],
-    pool: &ClientPool,
-    duration: Duration,
-) {
+async fn run_raft_ticks(nodes: &[&Arc<RwLock<NodeState>>], pool: &ClientPool, duration: Duration) {
     let start = Instant::now();
     let mut interval = tokio::time::interval(Duration::from_millis(10));
     while start.elapsed() < duration {
@@ -235,8 +230,15 @@ async fn two_nodes_elect_one_leader() {
     run_raft_ticks(&[&n1.state, &n2.state], &pool, Duration::from_secs(2)).await;
 
     let states = [&n1.state, &n2.state];
-    assert_eq!(count_leaders(&states).await, 1, "Exactly one leader expected");
-    assert!(all_agree_on_leader(&states).await, "Both nodes should agree on leader");
+    assert_eq!(
+        count_leaders(&states).await,
+        1,
+        "Exactly one leader expected"
+    );
+    assert!(
+        all_agree_on_leader(&states).await,
+        "Both nodes should agree on leader"
+    );
 
     shutdown_node(n1);
     shutdown_node(n2);
@@ -266,8 +268,14 @@ async fn two_node_leader_dies_survivor_cannot_elect() {
     // Survivor can't elect - quorum is 2, only 1 alive
     run_raft_ticks(&[&survivor_state], &pool, Duration::from_secs(2)).await;
 
-    assert!(!matches!(get_role(&survivor_state).await, raft::Role::Leader));
-    assert!(get_term(&survivor_state).await > term_before, "Term should increase from failed elections");
+    assert!(!matches!(
+        get_role(&survivor_state).await,
+        raft::Role::Leader
+    ));
+    assert!(
+        get_term(&survivor_state).await > term_before,
+        "Term should increase from failed elections"
+    );
 
     // Cleanup remaining node
     if let Ok(_) = Arc::try_unwrap(survivor_state) {
@@ -298,11 +306,15 @@ async fn three_nodes_elect_one_leader() {
         &[&n1.state, &n2.state, &n3.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
     let states = [&n1.state, &n2.state, &n3.state];
     assert_eq!(count_leaders(&states).await, 1, "Exactly one leader");
-    assert!(all_agree_on_leader(&states).await, "All nodes agree on leader");
+    assert!(
+        all_agree_on_leader(&states).await,
+        "All nodes agree on leader"
+    );
     assert!(all_same_term(&states).await, "All nodes at same term");
 
     shutdown_node(n1);
@@ -318,14 +330,19 @@ async fn three_nodes_stable_over_time() {
         &[&n1.state, &n2.state, &n3.state],
         &pool,
         Duration::from_secs(5),
-    ).await;
+    )
+    .await;
 
     let states = [&n1.state, &n2.state, &n3.state];
     assert_eq!(count_leaders(&states).await, 1);
     assert!(all_agree_on_leader(&states).await);
     // Should have elected once and stayed stable - low term
     let term = get_term(&n1.state).await;
-    assert!(term <= 3, "Term should be low if cluster is stable, got {}", term);
+    assert!(
+        term <= 3,
+        "Term should be low if cluster is stable, got {}",
+        term
+    );
 
     shutdown_node(n1);
     shutdown_node(n2);
@@ -340,7 +357,8 @@ async fn leader_shutdown_triggers_new_election() {
         &[&n1.state, &n2.state, &n3.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
     // Find the leader
     let s1_role = get_role(&n1.state).await;
@@ -375,14 +393,27 @@ async fn leader_shutdown_triggers_new_election() {
     run_raft_ticks(&[&f1_state, &f2_state], &pool, Duration::from_secs(2)).await;
 
     let states = [&f1_state, &f2_state];
-    assert_eq!(count_leaders(&states).await, 1, "Surviving nodes should elect a new leader");
-    assert!(all_agree_on_leader(&states).await, "Survivors should agree on leader");
+    assert_eq!(
+        count_leaders(&states).await,
+        1,
+        "Surviving nodes should elect a new leader"
+    );
+    assert!(
+        all_agree_on_leader(&states).await,
+        "Survivors should agree on leader"
+    );
 
     let new_leader_id = get_leader_id(&states).await.unwrap();
-    assert_ne!(new_leader_id, old_leader_id, "New leader should not be the dead node");
+    assert_ne!(
+        new_leader_id, old_leader_id,
+        "New leader should not be the dead node"
+    );
 
     let new_term = get_term(&f1_state).await;
-    assert!(new_term > old_term, "Term should increase after re-election");
+    assert!(
+        new_term > old_term,
+        "Term should increase after re-election"
+    );
 }
 
 #[tokio::test]
@@ -393,7 +424,8 @@ async fn follower_shutdown_leader_survives() {
         &[&n1.state, &n2.state, &n3.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
     // Find the leader and a follower
     let s1_role = get_role(&n1.state).await;
@@ -426,11 +458,27 @@ async fn follower_shutdown_leader_survives() {
     }
 
     // Run ticks - leader should remain leader
-    run_raft_ticks(&[&leader_state, &remaining_state], &pool, Duration::from_secs(2)).await;
+    run_raft_ticks(
+        &[&leader_state, &remaining_state],
+        &pool,
+        Duration::from_secs(2),
+    )
+    .await;
 
-    assert!(matches!(get_role(&leader_state).await, raft::Role::Leader), "Leader should still be leader");
-    assert_eq!(get_node_id(&leader_state).await, leader_id, "Same node should still be leader");
-    assert_eq!(get_term(&leader_state).await, leader_term, "Term should not change");
+    assert!(
+        matches!(get_role(&leader_state).await, raft::Role::Leader),
+        "Leader should still be leader"
+    );
+    assert_eq!(
+        get_node_id(&leader_state).await,
+        leader_id,
+        "Same node should still be leader"
+    );
+    assert_eq!(
+        get_term(&leader_state).await,
+        leader_term,
+        "Term should not change"
+    );
 }
 
 #[tokio::test]
@@ -468,7 +516,10 @@ async fn dead_node_rejoins_as_follower() {
 
     let states = [&n1.state, &n2_new.state];
     assert_eq!(count_leaders(&states).await, 1, "One leader expected");
-    assert!(all_agree_on_leader(&states).await, "Both should agree on leader");
+    assert!(
+        all_agree_on_leader(&states).await,
+        "Both should agree on leader"
+    );
 
     shutdown_node(n1);
     shutdown_node(n2_new);
@@ -489,9 +540,14 @@ async fn all_nodes_shutdown_and_restart() {
         &[&n1.state, &n2.state, &n3.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
-    assert!(get_leader_id(&[&n1.state, &n2.state, &n3.state]).await.is_some());
+    assert!(
+        get_leader_id(&[&n1.state, &n2.state, &n3.state])
+            .await
+            .is_some()
+    );
 
     // Kill everyone
     shutdown_node(n1);
@@ -510,11 +566,19 @@ async fn all_nodes_shutdown_and_restart() {
         &[&r1.state, &r2.state, &r3.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
     let states = [&r1.state, &r2.state, &r3.state];
-    assert_eq!(count_leaders(&states).await, 1, "New cluster should have one leader");
-    assert!(all_agree_on_leader(&states).await, "All should agree on leader");
+    assert_eq!(
+        count_leaders(&states).await,
+        1,
+        "New cluster should have one leader"
+    );
+    assert!(
+        all_agree_on_leader(&states).await,
+        "All should agree on leader"
+    );
     assert!(all_same_term(&states).await, "All at same term");
 
     shutdown_node(r1);
@@ -530,7 +594,8 @@ async fn two_of_three_nodes_die_survivor_cannot_elect() {
         &[&n1.state, &n2.state, &n3.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
     let term_before = get_term(&n1.state).await;
 
@@ -554,9 +619,7 @@ async fn two_of_three_nodes_die_survivor_cannot_elect() {
     run_raft_ticks(&[&survivor.state], &pool, Duration::from_secs(2)).await;
 
     let role = get_role(&survivor.state).await;
-    assert!(
-        get_peers(&survivor.state).await.len() == 2
-    );
+    assert!(get_peers(&survivor.state).await.len() == 2);
     assert!(
         !matches!(role, raft::Role::Leader),
         "Survivor should not be leader without quorum"
@@ -577,10 +640,12 @@ async fn two_of_three_nodes_die_survivor_cannot_elect() {
 async fn five_nodes_elect_one_leader() {
     let ports = allocate_ports(5);
     let nodes: Vec<TestNode> = futures::future::join_all(
-        ["A", "B", "C", "D", "E"].iter().enumerate().map(|(i, id)| {
-            start_node(id, ports[i])
-        })
-    ).await;
+        ["A", "B", "C", "D", "E"]
+            .iter()
+            .enumerate()
+            .map(|(i, id)| start_node(id, ports[i])),
+    )
+    .await;
 
     let refs: Vec<&TestNode> = nodes.iter().collect();
     wire_peers(&refs).await;
@@ -590,8 +655,15 @@ async fn five_nodes_elect_one_leader() {
 
     run_raft_ticks(&state_refs, &pool, Duration::from_secs(3)).await;
 
-    assert_eq!(count_leaders(&state_refs).await, 1, "Exactly one leader in 5-node cluster");
-    assert!(all_agree_on_leader(&state_refs).await, "All 5 nodes agree on leader");
+    assert_eq!(
+        count_leaders(&state_refs).await,
+        1,
+        "Exactly one leader in 5-node cluster"
+    );
+    assert!(
+        all_agree_on_leader(&state_refs).await,
+        "All 5 nodes agree on leader"
+    );
     assert!(all_same_term(&state_refs).await, "All 5 nodes at same term");
 
     for n in nodes {
@@ -615,7 +687,8 @@ async fn five_nodes_tolerate_two_failures() {
         &[&n1.state, &n2.state, &n3.state, &n4.state, &n5.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
     let states_all = [&n1.state, &n2.state, &n3.state, &n4.state, &n5.state];
     assert_eq!(count_leaders(&states_all).await, 1);
@@ -639,10 +712,15 @@ async fn five_nodes_tolerate_two_failures() {
         &[&n1.state, &n2.state, &n3.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
     let states_surviving = [&n1.state, &n2.state, &n3.state];
-    assert_eq!(count_leaders(&states_surviving).await, 1, "3 surviving nodes should have a leader");
+    assert_eq!(
+        count_leaders(&states_surviving).await,
+        1,
+        "3 surviving nodes should have a leader"
+    );
     assert!(all_agree_on_leader(&states_surviving).await);
 
     shutdown_node(n1);
@@ -667,7 +745,8 @@ async fn killed_leader_rejoins_as_follower() {
         &[&n1.state, &n2.state, &n3.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
     // Find leader
     let s1_role = get_role(&n1.state).await;
@@ -703,17 +782,22 @@ async fn killed_leader_rejoins_as_follower() {
         &[&survivor1.state, &survivor2.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
-    let new_leader_id = get_leader_id(&[&survivor1.state, &survivor2.state]).await.unwrap();
+    let new_leader_id = get_leader_id(&[&survivor1.state, &survivor2.state])
+        .await
+        .unwrap();
     assert_ne!(new_leader_id, old_leader_id);
 
     // Restart old leader with new identity
     let revived = start_node("A-revived", old_leader_port).await;
     {
         let mut s = revived.state.write().await;
-        s.raft.add_peer(make_peer(&survivor1.node_id, survivor1.port));
-        s.raft.add_peer(make_peer(&survivor2.node_id, survivor2.port));
+        s.raft
+            .add_peer(make_peer(&survivor1.node_id, survivor1.port));
+        s.raft
+            .add_peer(make_peer(&survivor2.node_id, survivor2.port));
     }
     {
         let mut s = survivor1.state.write().await;
@@ -728,11 +812,19 @@ async fn killed_leader_rejoins_as_follower() {
         &[&survivor1.state, &survivor2.state, &revived.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
     let all_states = [&survivor1.state, &survivor2.state, &revived.state];
-    assert_eq!(count_leaders(&all_states).await, 1, "One leader after rejoin");
-    assert!(all_agree_on_leader(&all_states).await, "All agree after rejoin");
+    assert_eq!(
+        count_leaders(&all_states).await,
+        1,
+        "One leader after rejoin"
+    );
+    assert!(
+        all_agree_on_leader(&all_states).await,
+        "All agree after rejoin"
+    );
 
     // Revived node should be follower
     assert!(
@@ -790,10 +882,15 @@ async fn nodes_join_one_at_a_time() {
         &[&n1.state, &n2.state, &n3.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
     let states_3 = [&n1.state, &n2.state, &n3.state];
-    assert_eq!(count_leaders(&states_3).await, 1, "One leader after 3rd node joins");
+    assert_eq!(
+        count_leaders(&states_3).await,
+        1,
+        "One leader after 3rd node joins"
+    );
     assert!(all_agree_on_leader(&states_3).await);
 
     // Add fourth node
@@ -813,10 +910,15 @@ async fn nodes_join_one_at_a_time() {
         &[&n1.state, &n2.state, &n3.state, &n4.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
     let states_4 = [&n1.state, &n2.state, &n3.state, &n4.state];
-    assert_eq!(count_leaders(&states_4).await, 1, "One leader after 4th node joins");
+    assert_eq!(
+        count_leaders(&states_4).await,
+        1,
+        "One leader after 4th node joins"
+    );
     assert!(all_agree_on_leader(&states_4).await);
 
     shutdown_node(n1);
@@ -837,7 +939,8 @@ async fn leader_auto_removes_offline_peer() {
         &[&n1.state, &n2.state, &n3.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
     // Find the leader
     let s1_role = get_role(&n1.state).await;
@@ -862,10 +965,16 @@ async fn leader_auto_removes_offline_peer() {
         &leader_state,
         &dead_id,
         Duration::from_millis(OFFLINE_TIMEOUT_MS + 1000),
-    ).await;
+    )
+    .await;
 
     // One tick is enough to trigger removal
-    run_raft_ticks(&[&leader_state, &remaining.state], &pool, Duration::from_millis(500)).await;
+    run_raft_ticks(
+        &[&leader_state, &remaining.state],
+        &pool,
+        Duration::from_millis(500),
+    )
+    .await;
 
     // Leader should have removed the dead peer
     let leader_peers = get_peers(&leader_state).await;
@@ -889,7 +998,8 @@ async fn leader_broadcasts_removal_to_remaining_peers() {
         &[&n1.state, &n2.state, &n3.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
     let s1_role = get_role(&n1.state).await;
     let s2_role = get_role(&n2.state).await;
@@ -911,10 +1021,16 @@ async fn leader_broadcasts_removal_to_remaining_peers() {
         &leader_state,
         &dead_id,
         Duration::from_millis(OFFLINE_TIMEOUT_MS + 1000),
-    ).await;
+    )
+    .await;
 
     // Run ticks — leader detects offline, sends RemovePeer to remaining node
-    run_raft_ticks(&[&leader_state, &remaining_state], &pool, Duration::from_secs(1)).await;
+    run_raft_ticks(
+        &[&leader_state, &remaining_state],
+        &pool,
+        Duration::from_secs(1),
+    )
+    .await;
 
     // Remaining node should also have the dead peer removed (via RemovePeer RPC)
     let remaining_peers = get_peers(&remaining_state).await;
@@ -937,7 +1053,8 @@ async fn offline_peer_rejoins_after_auto_removal() {
         &[&n1.state, &n2.state, &n3.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
     // Find leader
     let s1_role = get_role(&n1.state).await;
@@ -961,11 +1078,22 @@ async fn offline_peer_rejoins_after_auto_removal() {
         &leader.state,
         &victim_id,
         Duration::from_millis(OFFLINE_TIMEOUT_MS + 1000),
-    ).await;
-    run_raft_ticks(&[&leader.state, &survivor.state], &pool, Duration::from_secs(1)).await;
+    )
+    .await;
+    run_raft_ticks(
+        &[&leader.state, &survivor.state],
+        &pool,
+        Duration::from_secs(1),
+    )
+    .await;
 
     // Verify removal happened
-    assert!(!get_peers(&leader.state).await.iter().any(|p| p.node_id == victim_id));
+    assert!(
+        !get_peers(&leader.state)
+            .await
+            .iter()
+            .any(|p| p.node_id == victim_id)
+    );
 
     // Restart the dead node with a new identity
     let revived = start_node("C-revived", victim_port).await;
@@ -987,7 +1115,8 @@ async fn offline_peer_rejoins_after_auto_removal() {
         &[&leader.state, &survivor.state, &revived.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
     let all = [&leader.state, &survivor.state, &revived.state];
     assert_eq!(count_leaders(&all).await, 1, "One leader after rejoin");
@@ -1017,7 +1146,8 @@ async fn leader_handles_multiple_peers_going_offline() {
         &[&n1.state, &n2.state, &n3.state, &n4.state, &n5.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
     // Force n1 to be leader for determinism — find actual leader
     let states_all = [&n1.state, &n2.state, &n3.state, &n4.state, &n5.state];
@@ -1033,7 +1163,7 @@ async fn leader_handles_multiple_peers_going_offline() {
     // Find the leader among survivors and backdate dead peers
     let s1_role = get_role(&n1.state).await;
     let s2_role = get_role(&n2.state).await;
-    
+
     let leader_state = if matches!(s1_role, raft::Role::Leader) {
         &n1.state
     } else if matches!(s2_role, raft::Role::Leader) {
@@ -1042,19 +1172,32 @@ async fn leader_handles_multiple_peers_going_offline() {
         &n3.state
     };
 
-    backdate_peer_last_seen(leader_state, &dead1_id, Duration::from_millis(OFFLINE_TIMEOUT_MS + 1000)).await;
-    backdate_peer_last_seen(leader_state, &dead2_id, Duration::from_millis(OFFLINE_TIMEOUT_MS + 1000)).await;
+    backdate_peer_last_seen(
+        leader_state,
+        &dead1_id,
+        Duration::from_millis(OFFLINE_TIMEOUT_MS + 1000),
+    )
+    .await;
+    backdate_peer_last_seen(
+        leader_state,
+        &dead2_id,
+        Duration::from_millis(OFFLINE_TIMEOUT_MS + 1000),
+    )
+    .await;
 
     run_raft_ticks(
         &[&n1.state, &n2.state, &n3.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
     // Leader should have removed both dead peers
     let leader_peers = get_peers(leader_state).await;
     assert!(
-        !leader_peers.iter().any(|p| p.node_id == dead1_id || p.node_id == dead2_id),
+        !leader_peers
+            .iter()
+            .any(|p| p.node_id == dead1_id || p.node_id == dead2_id),
         "Both dead peers should be auto-removed"
     );
 
@@ -1076,7 +1219,8 @@ async fn only_leader_triggers_offline_removal() {
         &[&n1.state, &n2.state, &n3.state],
         &pool,
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
 
     // Find a follower
     let s1_role = get_role(&n1.state).await;
@@ -1095,7 +1239,12 @@ async fn only_leader_triggers_offline_removal() {
         let s = follower_state.read().await;
         s.raft.peers[0].node_id.clone()
     };
-    backdate_peer_last_seen(follower_state, &peer_id, Duration::from_millis(OFFLINE_TIMEOUT_MS + 1000)).await;
+    backdate_peer_last_seen(
+        follower_state,
+        &peer_id,
+        Duration::from_millis(OFFLINE_TIMEOUT_MS + 1000),
+    )
+    .await;
 
     let peers_before = get_peers(follower_state).await.len();
     run_raft_ticks(&[follower_state], &pool, Duration::from_millis(500)).await;

@@ -3,16 +3,22 @@ pub mod client_pool;
 
 use std::sync::Arc;
 
-use mesh::undergrid::{AddPeerRequest, AddPeerResponse, AppendEntriesRequest, AppendEntriesResponse, HeartbeatRequest, HeartbeatResponse, NodeInfo, RegisterRequest, RegisterResponse, RemovePeerRequest, RemovePeerResponse, ResourceSnapshot, VoteRequest, VoteResponse};
+use mesh::undergrid::{
+    AddPeerRequest, AddPeerResponse, AppendEntriesRequest, AppendEntriesResponse, HeartbeatRequest,
+    HeartbeatResponse, NodeInfo, RegisterRequest, RegisterResponse, RemovePeerRequest,
+    RemovePeerResponse, ResourceSnapshot, VoteRequest, VoteResponse,
+};
 use tokio::sync::RwLock;
 
-use crate::{client::{client_error::ClientError, client_pool::ClientPool}, node::state::NodeState};
-
+use crate::{
+    client::{client_error::ClientError, client_pool::ClientPool},
+    node::state::NodeState,
+};
 
 pub async fn register_with_leader(
     pool: &ClientPool,
     addr: &str,
-    state: &Arc<RwLock<NodeState>>
+    state: &Arc<RwLock<NodeState>>,
 ) -> Result<RegisterResponse, ClientError> {
     let mut client = pool.get(addr).await?;
 
@@ -38,7 +44,8 @@ pub async fn register_with_leader(
     // Release read
     drop(s);
 
-    let response = client.register(request)
+    let response = client
+        .register(request)
         .await
         .map_err(|e| ClientError::QueryError(e.to_string()))?;
     Ok(response.into_inner())
@@ -47,7 +54,7 @@ pub async fn register_with_leader(
 pub async fn send_heartbeat(
     pool: &ClientPool,
     addr: &str,
-    state: &Arc<RwLock<NodeState>>
+    state: &Arc<RwLock<NodeState>>,
 ) -> Result<HeartbeatResponse, ClientError> {
     let mut client = pool.get(addr).await?;
 
@@ -69,7 +76,8 @@ pub async fn send_heartbeat(
     // Release read
     drop(s);
 
-    let response = client.heartbeat(request)
+    let response = client
+        .heartbeat(request)
         .await
         .map_err(|e| ClientError::QueryError(e.to_string()))?;
 
@@ -84,12 +92,10 @@ pub async fn send_vote_request(
 ) -> Result<VoteResponse, ClientError> {
     let mut client = pool.get(addr).await?;
 
-    let request = VoteRequest {
-        term,
-        candidate_id,
-    };
+    let request = VoteRequest { term, candidate_id };
 
-    let response = client.vote(request)
+    let response = client
+        .vote(request)
         .await
         .map_err(|e| ClientError::QueryError(e.to_string()))?;
 
@@ -104,12 +110,10 @@ pub async fn send_append_entries(
 ) -> Result<AppendEntriesResponse, ClientError> {
     let mut client = pool.get(addr).await?;
 
-    let request = AppendEntriesRequest {
-        term,
-        leader_id,
-    };
+    let request = AppendEntriesRequest { term, leader_id };
 
-    let response = client.append_entries(request)
+    let response = client
+        .append_entries(request)
         .await
         .map_err(|e| ClientError::QueryError(e.to_string()))?;
 
@@ -127,7 +131,8 @@ pub async fn add_peer(
         peer_node_info: Some(peer_node_info),
     };
 
-    let response = client.add_peer(request)
+    let response = client
+        .add_peer(request)
         .await
         .map_err(|e| ClientError::QueryError(e.to_string()))?;
 
@@ -141,15 +146,12 @@ pub async fn remove_peer(
 ) -> Result<RemovePeerResponse, ClientError> {
     let mut client = pool.get(addr).await?;
 
-    let request = RemovePeerRequest {
-        peer_node_id,
-    };
+    let request = RemovePeerRequest { peer_node_id };
 
-    let response = client.remove_peer(request)
+    let response = client
+        .remove_peer(request)
         .await
         .map_err(|e| ClientError::QueryError(e.to_string()))?;
 
     Ok(response.into_inner())
 }
-
-

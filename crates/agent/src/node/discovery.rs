@@ -3,13 +3,16 @@ use std::{sync::Arc, time::Instant};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use tokio::sync::RwLock;
 
-use crate::{client::{register_with_leader, client_pool::ClientPool}, node::state::NodeState};
+use crate::{
+    client::{client_pool::ClientPool, register_with_leader},
+    node::state::NodeState,
+};
 
 pub fn advertise(node_id: &str, hostname: &str, port: u16) -> ServiceDaemon {
     let mdns = ServiceDaemon::new().expect("Failed to create mDNS daemon");
 
     let service_type = "_undergrid._tcp.local.";
-    
+
     let mdns_hostname = if hostname.ends_with(".local.") {
         hostname.to_string()
     } else {
@@ -23,7 +26,8 @@ pub fn advertise(node_id: &str, hostname: &str, port: u16) -> ServiceDaemon {
         "127.0.0.1", // Hardcode to local network for now
         port,
         None,
-    ).expect("Failed to create service info");
+    )
+    .expect("Failed to create service info");
 
     mdns.register(service_info)
         .expect("Failed to register mDNS service");
@@ -31,14 +35,10 @@ pub fn advertise(node_id: &str, hostname: &str, port: u16) -> ServiceDaemon {
     mdns
 }
 
-pub fn discover_peers(
-    state: Arc<RwLock<NodeState>>,
-    client_pool: Arc<ClientPool>,
-) {
+pub fn discover_peers(state: Arc<RwLock<NodeState>>, client_pool: Arc<ClientPool>) {
     let mdns = ServiceDaemon::new().expect("Failed to create mDNS browser");
     let service_type = "_undergrid._tcp.local.";
-    let receiver = mdns.browse(service_type)
-        .expect("Failed to browse mDNS");
+    let receiver = mdns.browse(service_type).expect("Failed to browse mDNS");
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(32);
 
@@ -65,7 +65,7 @@ pub fn discover_peers(
 
                     let dominated = {
                         let s = state.read().await;
-                        
+
                         // Skip if self
                         if info.get_fullname().contains(&s.raft.node_id) {
                             continue;
@@ -113,4 +113,3 @@ pub fn discover_peers(
         }
     });
 }
-

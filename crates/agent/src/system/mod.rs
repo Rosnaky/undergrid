@@ -44,9 +44,7 @@ impl SystemSnapshot {
         let cpu = Self::read_cpu()?;
         let memory = Self::read_memory()?;
         let disk = Self::read_disk()?;
-        let hostname = gethostname::gethostname()
-            .to_string_lossy()
-            .to_string();
+        let hostname = gethostname::gethostname().to_string_lossy().to_string();
 
         Ok(SystemSnapshot {
             cpu,
@@ -103,7 +101,6 @@ impl SystemSnapshot {
             .parse()
             .map_err(|e| SystemError::ParseError(format!("Bad cpu MHz value: {}", e)))?;
 
-
         Ok(CpuInfo {
             cpu_cores,
             cpu_usage_pct: 0.0,
@@ -122,8 +119,7 @@ impl SystemSnapshot {
         for line in contents.lines() {
             if line.starts_with("MemTotal:") {
                 total = Some(Self::parse_meminfo_line(line)?);
-            }
-            else if line.starts_with("MemAvailable:") {
+            } else if line.starts_with("MemAvailable:") {
                 available = Some(Self::parse_meminfo_line(line)?);
             }
 

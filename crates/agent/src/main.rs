@@ -1,6 +1,13 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use agent::{client::{send_heartbeat, client_pool::ClientPool}, config::NodeConfig, node::runner::handle_raft_tick, server::node_agent::NodeAgentService, node::state::NodeState, system::SystemSnapshot};
+use agent::{
+    client::{client_pool::ClientPool, send_heartbeat},
+    config::NodeConfig,
+    node::runner::handle_raft_tick,
+    node::state::NodeState,
+    server::node_agent::NodeAgentService,
+    system::SystemSnapshot,
+};
 use clap::Parser;
 use mesh::undergrid::node_agent_server::NodeAgentServer;
 use raft::Role;
@@ -15,15 +22,13 @@ struct Args {
 
     #[arg(long)]
     join_hostname: Option<String>,
-    
+
     #[arg(long)]
     join_port: Option<u16>,
 }
 
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    
     let args = Args::parse();
 
     // Logging
@@ -76,11 +81,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse()
         .expect("Invalid bind address");
 
-    let _mdns = agent::node::discovery::advertise(
-        &config.node_id, 
-        &system_snapshot.hostname, 
-        config.port,
-    );
+    let _mdns =
+        agent::node::discovery::advertise(&config.node_id, &system_snapshot.hostname, config.port);
 
     let service = NodeAgentService::new(state.clone());
 
@@ -89,23 +91,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grpc_handle = tokio::spawn(
         tonic::transport::Server::builder()
             .add_service(NodeAgentServer::new(service))
-            .serve(addr)
+            .serve(addr),
     );
 
     let disc_state = Arc::clone(&state);
     let disc_pool = Arc::clone(&client_pool);
 
-    let mut raft_interval = tokio::time::interval(
-        std::time::Duration::from_millis(10),
-    );
+    let mut raft_interval = tokio::time::interval(std::time::Duration::from_millis(10));
 
-    let mut monitor_interval = tokio::time::interval(
-        std::time::Duration::from_secs(5),
-    );
+    let mut monitor_interval = tokio::time::interval(std::time::Duration::from_secs(5));
 
-    let mut heartbeat_interval = tokio::time::interval(
-        std::time::Duration::from_millis(500),
-    );
+    let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_millis(500));
 
     agent::node::discovery::discover_peers(disc_state, disc_pool);
 
