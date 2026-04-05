@@ -69,8 +69,8 @@ fn send_heartbeats_3(a: &mut RaftNode, b: &mut RaftNode, c: &mut RaftNode) {
         } else {
             c.handle_append_entries_request(leader_id, term)
         };
-        if let RaftMessage::AppendEntriesResponse { term, success, .. } = resp {
-            a.handle_append_entries_response(term, success);
+        if let RaftMessage::AppendEntriesResponse { term, success, from, .. } = resp {
+            a.handle_append_entries_response(from, term, success);
         }
     }
 }
@@ -436,7 +436,7 @@ fn leader_stays_leader_on_same_term_response() {
     n.role = Role::Leader;
     n.term = 3;
     n.leader_id = Some("A".to_string());
-    n.handle_append_entries_response(3, true);
+    n.handle_append_entries_response("B".to_string(), 3, true);
     assert!(is_leader(&n));
 }
 
@@ -446,7 +446,7 @@ fn leader_stays_leader_on_lower_term_response() {
     n.role = Role::Leader;
     n.term = 5;
     n.leader_id = Some("A".to_string());
-    n.handle_append_entries_response(3, true);
+    n.handle_append_entries_response("B".to_string(), 3, true);
     assert!(is_leader(&n));
 }
 
@@ -456,7 +456,7 @@ fn leader_steps_down_when_response_has_higher_term() {
     n.role = Role::Leader;
     n.term = 3;
     n.leader_id = Some("A".to_string());
-    n.handle_append_entries_response(5, true);
+    n.handle_append_entries_response("B".to_string(), 5, true);
     assert!(is_follower(&n));
     assert_eq!(n.term, 5);
 }

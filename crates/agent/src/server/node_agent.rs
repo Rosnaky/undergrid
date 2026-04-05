@@ -139,6 +139,10 @@ impl NodeAgent for NodeAgentService {
             "Received heartbeat"
         );
 
+        let mut s = self.state.write().await;
+        s.raft.handle_heartbeat_response(req.node_id);
+        drop(s);
+
         Ok(Response::new(HeartbeatResponse {
             acknowledged: true,
         }))
@@ -196,8 +200,9 @@ impl NodeAgent for NodeAgentService {
         drop(state);
 
         match resp {
-            RaftMessage::AppendEntriesResponse { term, success, .. } => {
+            RaftMessage::AppendEntriesResponse { term, success, from, .. } => {
                 Ok(Response::new(AppendEntriesResponse {
+                    node_id: from,
                     term,
                     success,
                 }))
@@ -255,7 +260,7 @@ impl NodeAgent for NodeAgentService {
 
         drop(state);
 
-        tracing::info!(node_id = peer_node_id, "Received request to add peer node");
+        tracing::info!(node_id = peer_node_id, "Received request to remove peer node");
 
         match resp {
             RaftMessage::RemovePeerResponse { success } => {

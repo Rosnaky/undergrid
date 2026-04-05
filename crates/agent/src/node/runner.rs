@@ -57,7 +57,7 @@ pub async fn handle_raft_tick(
                         );
                         drop(s);
 
-                        tracing::info!(is_elected = resp.granted, "Election results");
+                        tracing::info!(is_elected = resp.granted, term = resp.term, "Election results");
 
                         for append_entries_msg in append_entries_msgs {
                             if let RaftMessage::AppendEntriesRequest { to, term, leader_id } = append_entries_msg {
@@ -86,8 +86,11 @@ pub async fn handle_raft_tick(
         for msg in remove_peer_msgs {
             if let RaftMessage::RemovePeerRequest { to, peer_node_id } = msg {
                 let pool = pool.clone();
+                let mut s = state.write().await;
+                s.raft.remove_peer(&peer_node_id);
+                drop(s);
                 remove_peer_futures.push(tokio::spawn(async move {
-                    (to.clone(), remove_peer(&pool, &to, peer_node_id).await)
+                    (to.clone(), remove_peer(&pool, &to, peer_node_id.clone()).await)
                 }));
             }
         }
@@ -129,7 +132,7 @@ pub async fn handle_raft_tick(
             match handle.await {
                 Ok((_, Ok(resp))) => {
                     let mut s = state.write().await;
-                    s.raft.handle_append_entries_response(resp.term, resp.success);
+                    s.raft.handle_append_entries_response(resp.node_id, resp.term, resp.success);
                 }
                 Ok((to, Err(e))) => {
                     tracing::warn!(peer = %to, "AppendEntries failed: {}", e);

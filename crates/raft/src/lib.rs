@@ -67,6 +67,7 @@ pub enum RaftMessage {
     },
     AppendEntriesResponse {
         to: String,
+        from: String,
         term: u64,
         success: bool,
     },
@@ -125,15 +126,9 @@ impl RaftNode {
             .map(|peer| peer.node_id.clone())
             .collect();
 
-        let original_peer_count = self.peers.len();
-
         self.peers.retain(|peer| {
             now.duration_since(peer.last_seen) < offline_timeout
         });
-
-        if original_peer_count != self.peers.len() {
-            self.step_down_to_follower();
-        }
 
         self.peers
             .iter()
@@ -180,6 +175,10 @@ impl RaftNode {
                 candidate_id: self.node_id.clone(), 
             })
             .collect()
+    }
+
+    pub fn handle_heartbeat_response(&mut self, node_id: String) {
+        self.update_last_seen(node_id);
     }
 
     pub fn handle_vote_request(&mut self, candidate_id: String, candidate_term: u64) -> RaftMessage {
@@ -263,6 +262,7 @@ impl RaftNode {
         {
             return RaftMessage::AppendEntriesResponse { 
                 to: leader_id.clone(), 
+                from: self.node_id.clone(),
                 term: self.term, 
                 success: false,
             }
@@ -274,12 +274,14 @@ impl RaftNode {
         
         RaftMessage::AppendEntriesResponse { 
             to: leader_id.clone(), 
+            from: self.node_id.clone(),
             term, 
             success: true 
         }
     }
 
-    pub fn handle_append_entries_response(&mut self, term: u64, success: bool) {
+    pub fn handle_append_entries_response(&mut self, node_id: String, term: u64, success: bool) {
+        self.update_last_seen(node_id);
         let _ = success;
         if term > self.term {
             self.term = term;
