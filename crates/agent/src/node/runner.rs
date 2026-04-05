@@ -65,12 +65,6 @@ pub async fn handle_raft_tick(state: &Arc<RwLock<NodeState>>, pool: &ClientPool)
                             s.raft.handle_vote_response(from, resp.term, resp.granted);
                         drop(s);
 
-                        tracing::info!(
-                            is_elected = resp.granted,
-                            term = resp.term,
-                            "Election results"
-                        );
-
                         for append_entries_msg in append_entries_msgs {
                             if let RaftMessage::AppendEntriesRequest {
                                 to,
