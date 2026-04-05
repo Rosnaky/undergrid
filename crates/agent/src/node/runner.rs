@@ -86,9 +86,6 @@ pub async fn handle_raft_tick(
         for msg in remove_peer_msgs {
             if let RaftMessage::RemovePeerRequest { to, peer_node_id } = msg {
                 let pool = pool.clone();
-                let mut s = state.write().await;
-                s.raft.remove_peer(&peer_node_id);
-                drop(s);
                 remove_peer_futures.push(tokio::spawn(async move {
                     (to.clone(), remove_peer(&pool, &to, peer_node_id.clone()).await)
                 }));

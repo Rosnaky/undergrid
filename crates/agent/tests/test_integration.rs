@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
+use agent::defines::OFFLINE_TIMEOUT_MS;
 use raft::Peer;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
@@ -24,6 +25,19 @@ fn allocate_ports(count: u16) -> Vec<u16> {
 
 fn allocate_port() -> u16 {
     allocate_ports(1)[0]
+}
+
+// ── Offline Timeout Helpers ──────────────────────────────
+
+async fn backdate_peer_last_seen(
+    state: &Arc<RwLock<NodeState>>,
+    peer_node_id: &str,
+    age: Duration,
+) {
+    let mut s = state.write().await;
+    if let Some(peer) = s.raft.peers.iter_mut().find(|p| p.node_id == peer_node_id) {
+        peer.last_seen = Instant::now() - age;
+    }
 }
 
 // ── Test Node ────────────────────────────────────────────
@@ -809,4 +823,289 @@ async fn nodes_join_one_at_a_time() {
     shutdown_node(n2);
     shutdown_node(n3);
     shutdown_node(n4);
+}
+
+// ═══════════════════════════════════════════════════════════
+// OFFLINE DETECTION & AUTO-REMOVAL
+// ═══════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn leader_auto_removes_offline_peer() {
+    let (n1, n2, n3, pool) = start_3_node_cluster().await;
+
+    run_raft_ticks(
+        &[&n1.state, &n2.state, &n3.state],
+        &pool,
+        Duration::from_secs(2),
+    ).await;
+
+    // Find the leader
+    let s1_role = get_role(&n1.state).await;
+    let s2_role = get_role(&n2.state).await;
+
+    let (leader_state, follower_node, remaining) = if matches!(s1_role, raft::Role::Leader) {
+        (n1.state.clone(), n2, n3)
+    } else if matches!(s2_role, raft::Role::Leader) {
+        (n2.state.clone(), n1, n3)
+    } else {
+        (n3.state.clone(), n1, n2)
+    };
+
+    let dead_id = follower_node.node_id.clone();
+
+    // Kill a follower
+    shutdown_node(follower_node);
+    sleep(Duration::from_millis(100)).await;
+
+    // Backdate the dead peer so offline timeout fires on next tick
+    backdate_peer_last_seen(
+        &leader_state,
+        &dead_id,
+        Duration::from_millis(OFFLINE_TIMEOUT_MS + 1000),
+    ).await;
+
+    // One tick is enough to trigger removal
+    run_raft_ticks(&[&leader_state, &remaining.state], &pool, Duration::from_millis(500)).await;
+
+    // Leader should have removed the dead peer
+    let leader_peers = get_peers(&leader_state).await;
+    assert!(
+        !leader_peers.iter().any(|p| p.node_id == dead_id),
+        "Dead peer should be auto-removed from leader"
+    );
+    assert_eq!(leader_peers.len(), 1, "Leader should have 1 remaining peer");
+
+    // Leader should still be leader
+    assert!(matches!(get_role(&leader_state).await, raft::Role::Leader));
+
+    shutdown_node(remaining);
+}
+
+#[tokio::test]
+async fn leader_broadcasts_removal_to_remaining_peers() {
+    let (n1, n2, n3, pool) = start_3_node_cluster().await;
+
+    run_raft_ticks(
+        &[&n1.state, &n2.state, &n3.state],
+        &pool,
+        Duration::from_secs(2),
+    ).await;
+
+    let s1_role = get_role(&n1.state).await;
+    let s2_role = get_role(&n2.state).await;
+
+    let (leader_state, follower_node, remaining_state) = if matches!(s1_role, raft::Role::Leader) {
+        (n1.state.clone(), n2, n3.state.clone())
+    } else if matches!(s2_role, raft::Role::Leader) {
+        (n2.state.clone(), n1, n3.state.clone())
+    } else {
+        (n3.state.clone(), n1, n2.state.clone())
+    };
+
+    let dead_id = follower_node.node_id.clone();
+    shutdown_node(follower_node);
+    sleep(Duration::from_millis(100)).await;
+
+    // Backdate on leader so offline detection fires
+    backdate_peer_last_seen(
+        &leader_state,
+        &dead_id,
+        Duration::from_millis(OFFLINE_TIMEOUT_MS + 1000),
+    ).await;
+
+    // Run ticks — leader detects offline, sends RemovePeer to remaining node
+    run_raft_ticks(&[&leader_state, &remaining_state], &pool, Duration::from_secs(1)).await;
+
+    // Remaining node should also have the dead peer removed (via RemovePeer RPC)
+    let remaining_peers = get_peers(&remaining_state).await;
+    assert!(
+        !remaining_peers.iter().any(|p| p.node_id == dead_id),
+        "Remaining node should have dead peer removed via broadcast"
+    );
+}
+
+#[tokio::test]
+async fn offline_peer_rejoins_after_auto_removal() {
+    let ports = allocate_ports(3);
+    let n1 = start_node("A", ports[0]).await;
+    let n2 = start_node("B", ports[1]).await;
+    let n3 = start_node("C", ports[2]).await;
+    let pool = ClientPool::new();
+
+    wire_peers(&[&n1, &n2, &n3]).await;
+    run_raft_ticks(
+        &[&n1.state, &n2.state, &n3.state],
+        &pool,
+        Duration::from_secs(2),
+    ).await;
+
+    // Find leader
+    let s1_role = get_role(&n1.state).await;
+    let s2_role = get_role(&n2.state).await;
+
+    let (leader, survivor, victim) = if matches!(s1_role, raft::Role::Leader) {
+        (n1, n2, n3)
+    } else if matches!(s2_role, raft::Role::Leader) {
+        (n2, n1, n3)
+    } else {
+        (n3, n1, n2)
+    };
+
+    let victim_id = victim.node_id.clone();
+    let victim_port = victim.port;
+    shutdown_node(victim);
+    sleep(Duration::from_millis(100)).await;
+
+    // Backdate and let leader auto-remove
+    backdate_peer_last_seen(
+        &leader.state,
+        &victim_id,
+        Duration::from_millis(OFFLINE_TIMEOUT_MS + 1000),
+    ).await;
+    run_raft_ticks(&[&leader.state, &survivor.state], &pool, Duration::from_secs(1)).await;
+
+    // Verify removal happened
+    assert!(!get_peers(&leader.state).await.iter().any(|p| p.node_id == victim_id));
+
+    // Restart the dead node with a new identity
+    let revived = start_node("C-revived", victim_port).await;
+    {
+        let mut s = revived.state.write().await;
+        s.raft.add_peer(make_peer(&leader.node_id, leader.port));
+        s.raft.add_peer(make_peer(&survivor.node_id, survivor.port));
+    }
+    {
+        let mut s = leader.state.write().await;
+        s.raft.add_peer(make_peer("C-revived", victim_port));
+    }
+    {
+        let mut s = survivor.state.write().await;
+        s.raft.add_peer(make_peer("C-revived", victim_port));
+    }
+
+    run_raft_ticks(
+        &[&leader.state, &survivor.state, &revived.state],
+        &pool,
+        Duration::from_secs(2),
+    ).await;
+
+    let all = [&leader.state, &survivor.state, &revived.state];
+    assert_eq!(count_leaders(&all).await, 1, "One leader after rejoin");
+    assert!(all_agree_on_leader(&all).await);
+    assert!(
+        matches!(get_role(&revived.state).await, raft::Role::Follower),
+        "Revived node should be follower"
+    );
+
+    shutdown_node(leader);
+    shutdown_node(survivor);
+    shutdown_node(revived);
+}
+
+#[tokio::test]
+async fn leader_handles_multiple_peers_going_offline() {
+    let ports = allocate_ports(5);
+    let n1 = start_node("A", ports[0]).await;
+    let n2 = start_node("B", ports[1]).await;
+    let n3 = start_node("C", ports[2]).await;
+    let n4 = start_node("D", ports[3]).await;
+    let n5 = start_node("E", ports[4]).await;
+    let pool = ClientPool::new();
+
+    wire_peers(&[&n1, &n2, &n3, &n4, &n5]).await;
+    run_raft_ticks(
+        &[&n1.state, &n2.state, &n3.state, &n4.state, &n5.state],
+        &pool,
+        Duration::from_secs(2),
+    ).await;
+
+    // Force n1 to be leader for determinism — find actual leader
+    let states_all = [&n1.state, &n2.state, &n3.state, &n4.state, &n5.state];
+    assert_eq!(count_leaders(&states_all).await, 1);
+
+    // Kill D and E
+    let dead1_id = n4.node_id.clone();
+    let dead2_id = n5.node_id.clone();
+    shutdown_node(n4);
+    shutdown_node(n5);
+    sleep(Duration::from_millis(100)).await;
+
+    // Find the leader among survivors and backdate dead peers
+    let s1_role = get_role(&n1.state).await;
+    let s2_role = get_role(&n2.state).await;
+    
+    let leader_state = if matches!(s1_role, raft::Role::Leader) {
+        &n1.state
+    } else if matches!(s2_role, raft::Role::Leader) {
+        &n2.state
+    } else {
+        &n3.state
+    };
+
+    backdate_peer_last_seen(leader_state, &dead1_id, Duration::from_millis(OFFLINE_TIMEOUT_MS + 1000)).await;
+    backdate_peer_last_seen(leader_state, &dead2_id, Duration::from_millis(OFFLINE_TIMEOUT_MS + 1000)).await;
+
+    run_raft_ticks(
+        &[&n1.state, &n2.state, &n3.state],
+        &pool,
+        Duration::from_secs(2),
+    ).await;
+
+    // Leader should have removed both dead peers
+    let leader_peers = get_peers(leader_state).await;
+    assert!(
+        !leader_peers.iter().any(|p| p.node_id == dead1_id || p.node_id == dead2_id),
+        "Both dead peers should be auto-removed"
+    );
+
+    // Cluster of 3 should still function
+    let states_surviving = [&n1.state, &n2.state, &n3.state];
+    assert_eq!(count_leaders(&states_surviving).await, 1);
+    assert!(all_agree_on_leader(&states_surviving).await);
+
+    shutdown_node(n1);
+    shutdown_node(n2);
+    shutdown_node(n3);
+}
+
+#[tokio::test]
+async fn only_leader_triggers_offline_removal() {
+    let (n1, n2, n3, pool) = start_3_node_cluster().await;
+
+    run_raft_ticks(
+        &[&n1.state, &n2.state, &n3.state],
+        &pool,
+        Duration::from_secs(2),
+    ).await;
+
+    // Find a follower
+    let s1_role = get_role(&n1.state).await;
+    let s2_role = get_role(&n2.state).await;
+
+    let (follower_state, other1, other2) = if !matches!(s1_role, raft::Role::Leader) {
+        (&n1.state, n2, n3)
+    } else if !matches!(s2_role, raft::Role::Leader) {
+        (&n2.state, n1, n3)
+    } else {
+        (&n3.state, n1, n2)
+    };
+
+    // Backdate a peer on the follower — should have no effect
+    let peer_id = {
+        let s = follower_state.read().await;
+        s.raft.peers[0].node_id.clone()
+    };
+    backdate_peer_last_seen(follower_state, &peer_id, Duration::from_millis(OFFLINE_TIMEOUT_MS + 1000)).await;
+
+    let peers_before = get_peers(follower_state).await.len();
+    run_raft_ticks(&[follower_state], &pool, Duration::from_millis(500)).await;
+    let peers_after = get_peers(follower_state).await.len();
+
+    assert_eq!(
+        peers_before, peers_after,
+        "Follower should NOT auto-remove peers — only leader does that"
+    );
+
+    shutdown_node(other1);
+    shutdown_node(other2);
 }
