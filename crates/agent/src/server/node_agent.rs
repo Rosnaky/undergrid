@@ -5,7 +5,7 @@ use raft::RaftMessage;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
-use crate::{client::{client::add_peer, client_pool::ClientPool}, node::state::NodeState};
+use crate::{client::{add_peer, client_pool::ClientPool}, node::state::NodeState};
 
 
 pub struct NodeAgentService {
@@ -59,7 +59,7 @@ impl NodeAgent for NodeAgentService {
             node_id: node_info.node_id.clone(),
             hostname: node_info.hostname.clone(),
             ip_address: node_info.ip_address.clone(),
-            port: node_info.port as u32,
+            port: node_info.port,
             resources: match state.last_snapshot.clone() {
                 Some(s) => Some(ResourceSnapshot {
                     cpu_cores: s.cpu.cpu_cores as u64,
@@ -95,7 +95,7 @@ impl NodeAgent for NodeAgentService {
                     node_id: p.node_id.clone(),
                     hostname: p.hostname.clone(),
                     ip_address: p.ip_address.clone(),
-                    port: p.port as u32,
+                    port: p.port,
                     resources: None,
                 })
                 .collect();

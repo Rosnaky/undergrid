@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Instant};
 use raft::{RaftMessage, Role};
 use tokio::sync::RwLock;
 
-use crate::{client::{client::{remove_peer, send_append_entries, send_vote_request}, client_pool::ClientPool}, defines::OFFLINE_TIMEOUT_MS, node::state::NodeState};
+use crate::{client::{remove_peer, send_append_entries, send_vote_request, client_pool::ClientPool}, defines::OFFLINE_TIMEOUT_MS, node::state::NodeState};
 
 pub async fn handle_raft_tick(
     state: &Arc<RwLock<NodeState>>,
@@ -61,7 +61,7 @@ pub async fn handle_raft_tick(
 
                         for append_entries_msg in append_entries_msgs {
                             if let RaftMessage::AppendEntriesRequest { to, term, leader_id } = append_entries_msg {
-                                let _ = send_append_entries(&pool, &to, leader_id, term).await;
+                                let _ = send_append_entries(pool, &to, leader_id, term).await;
                             }
                         }
                     }

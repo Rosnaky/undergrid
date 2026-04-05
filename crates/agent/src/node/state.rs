@@ -1,7 +1,7 @@
 use raft::RaftNode;
 use tokio::time::Instant;
 
-use crate::system::system::SystemSnapshot;
+use crate::system::SystemSnapshot;
 
 // TODO: Add resources for all peers
 pub struct NodeState {

@@ -252,7 +252,7 @@ impl RaftNode {
                 .collect()
         }
 
-        return vec![];
+        vec![]
     }
 
     pub fn handle_append_entries_request(&mut self, leader_id: String, term: u64) -> RaftMessage {
@@ -310,7 +310,7 @@ impl RaftNode {
     }
 
     pub fn quorum(&self) -> usize {
-        (self.peers.len() + 1) / 2 + 1
+        self.peers.len().div_ceil(2) + 1
     }
         
     // Private functions

@@ -13,6 +13,12 @@ pub struct ClientPool {
     cache: Arc<RwLock<HashMap<String, NodeAgentClient<Channel>>>>,
 }
 
+impl Default for ClientPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClientPool {
     pub fn new() -> Self {
         Self {

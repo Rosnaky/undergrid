@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Instant};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use tokio::sync::RwLock;
 
-use crate::{client::{client::register_with_leader, client_pool::ClientPool}, node::state::NodeState};
+use crate::{client::{register_with_leader, client_pool::ClientPool}, node::state::NodeState};
 
 pub fn advertise(node_id: &str, hostname: &str, port: u16) -> ServiceDaemon {
     let mdns = ServiceDaemon::new().expect("Failed to create mDNS daemon");
@@ -44,14 +44,9 @@ pub fn discover_peers(
 
     // Blocking thread for mDNS recv
     std::thread::spawn(move || {
-        loop {
-            match receiver.recv() {
-                Ok(event) => {
-                    if tx.blocking_send(event).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
+        while let Ok(event) = receiver.recv() {
+            if tx.blocking_send(event).is_err() {
+                break;
             }
         }
     });
