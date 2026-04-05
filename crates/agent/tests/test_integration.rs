@@ -278,7 +278,7 @@ async fn two_node_leader_dies_survivor_cannot_elect() {
     );
 
     // Cleanup remaining node
-    if let Ok(_) = Arc::try_unwrap(survivor_state) {
+    if Arc::try_unwrap(survivor_state).is_ok() {
         // state dropped
     }
 }

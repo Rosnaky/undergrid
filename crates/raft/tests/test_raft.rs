@@ -788,14 +788,12 @@ fn full_election_with_split_vote() {
             candidate_id,
             term,
         } = msg
-        {
-            if to == "http://C:2" {
+            && to == "http://C:2" {
                 let resp = c.handle_vote_request(candidate_id, term);
                 if let RaftMessage::VoteResponse { term, granted, .. } = resp {
                     a.handle_vote_response("C".to_string(), term, granted);
                 }
             }
-        }
     }
     // C rejects B
     for msg in b_msgs {
@@ -804,14 +802,12 @@ fn full_election_with_split_vote() {
             candidate_id,
             term,
         } = msg
-        {
-            if to == "http://C:2" {
+            && to == "http://C:2" {
                 let resp = c.handle_vote_request(candidate_id, term);
                 if let RaftMessage::VoteResponse { term, granted, .. } = resp {
                     b.handle_vote_response("C".to_string(), term, granted);
                 }
             }
-        }
     }
     assert!(is_leader(&a));
     assert!(is_candidate(&b));
@@ -859,14 +855,12 @@ fn leader_dies_new_leader_elected() {
             candidate_id,
             term,
         } = msg
-        {
-            if to == "http://C:2" {
+            && to == "http://C:2" {
                 let resp = c.handle_vote_request(candidate_id, term);
                 if let RaftMessage::VoteResponse { term, granted, .. } = resp {
                     b.handle_vote_response("C".to_string(), term, granted);
                 }
             }
-        }
     }
 
     // B wins with votes from B + C (2 of 3)
@@ -889,14 +883,12 @@ fn dead_node_rejoins_as_follower() {
             candidate_id,
             term,
         } = msg
-        {
-            if to == "http://C:2" {
+            && to == "http://C:2" {
                 let resp = c.handle_vote_request(candidate_id, term);
                 if let RaftMessage::VoteResponse { term, granted, .. } = resp {
                     b.handle_vote_response("C".to_string(), term, granted);
                 }
             }
-        }
     }
     assert!(is_leader(&b));
 
@@ -1091,14 +1083,12 @@ fn leader_dies_then_new_leader_dies() {
             candidate_id,
             term,
         } = msg
-        {
-            if to == "http://C:2" {
+            && to == "http://C:2" {
                 let resp = c.handle_vote_request(candidate_id, term);
                 if let RaftMessage::VoteResponse { term, granted, .. } = resp {
                     b.handle_vote_response("C".to_string(), term, granted);
                 }
             }
-        }
     }
     assert!(is_leader(&b));
     assert_eq!(b.term, 2);
