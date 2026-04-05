@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package undergrid;
+
+// Messages
+
+message ResourceSnapshot {
+    uint64 cpu_cores = 1;
+    double cpu_usage_pct = 2;
+    uint64 memory_total_bytes = 3;
+    uint64 memory_available_bytes = 4;
+    uint64 disk_total_bytes = 5;
+    uint64 disk_available_bytes = 6;
+}
+
+message NodeInfo {
+    string node_id = 1;
+    string hostname = 2;
+    string ip_address = 3;
+    uint32 port = 4;
+    ResourceSnapshot resources = 5;
+}
+
+// Ping
+
+message PingRequest {
+    string from_node_id = 1;
+}
+
+message PingResponse {
+    string node_id = 1;
+    uint64 uptime_secs = 2;
+}
+
+// Register
+
+message RegisterRequest {
+    NodeInfo node_info = 1;
+}
+
+message RegisterResponse {
+    bool accepted = 1;
+    string cluster_id = 2;
+    string leader_id = 3;
+    repeated NodeInfo peers = 4;
+}
+
+// Heartbeat
+
+message HeartbeatRequest {
+    string node_id = 1;
+    ResourceSnapshot resources = 2;
+    repeated string running_tasks = 3;
+}
+
+message HeartbeatResponse {
+    bool acknowledged = 1;
+}
+
+// Vote
+
+message VoteRequest {
+    uint64 term = 1;
+    string candidate_id = 2;
+}
+
+message VoteResponse {
+    uint64 term = 1;
+    bool granted = 2;
+}
+
+// Entries
+
+message AppendEntriesRequest {
+    uint64 term = 1;
+    string leader_id = 2;
+}
+
+message AppendEntriesResponse {
+    uint64 term = 1;
+    bool success = 2;
+    string node_id = 3;
+}
+
+// Add Peer
+
+message AddPeerRequest {
+    NodeInfo peer_node_info = 1;
+}
+
+message AddPeerResponse {
+    bool success = 1;
+}
+
+// Remove Peer
+
+message RemovePeerRequest {
+    string peer_node_id = 1;
+}
+
+message RemovePeerResponse {
+    bool success = 1;
+}
+
+service NodeAgent {
+    rpc Ping (PingRequest) returns (PingResponse);
+    rpc Register (RegisterRequest) returns (RegisterResponse);
+    rpc Heartbeat (HeartbeatRequest) returns (HeartbeatResponse);
+    rpc Vote (VoteRequest) returns (VoteResponse);
+    rpc AppendEntries (AppendEntriesRequest) returns (AppendEntriesResponse);
+    rpc AddPeer (AddPeerRequest) returns (AddPeerResponse);
+    rpc RemovePeer (RemovePeerRequest) returns (RemovePeerResponse);
+}
