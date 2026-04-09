@@ -4,6 +4,7 @@ pub mod job_error;
 use crate::job::job_error::JobError;
 use crate::task::Task;
 use crate::task::TaskId;
+use crate::task::TaskState;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -31,7 +32,6 @@ pub struct Job {
 impl Job {
     /// Uses Kahn's algorithm to create topological sort
     pub fn validate(&self) -> Result<Vec<Vec<TaskId>>, JobError> {
-        
         let mut queue = VecDeque::new();
         let mut dep_to_task_id: HashMap<TaskId, Vec<TaskId>> = HashMap::new();
         let mut task_id_to_indegree: HashMap<TaskId, u64> = HashMap::new();
@@ -64,8 +64,8 @@ impl Job {
             for _ in 0..s {
                 let id = queue.pop_front().unwrap();
 
-                if let Some(deps) = dep_to_task_id.get(&id) {
-                    for dep in deps {
+                if let Some(dependents) = dep_to_task_id.get(&id) {
+                    for dep in dependents {
                         let count = task_id_to_indegree.get_mut(dep).unwrap();
                         *count -= 1;
                         if *count == 0 {
@@ -73,9 +73,8 @@ impl Job {
                         }
                     }
 
-                    curr.push(id.clone());
                 }
-
+                curr.push(id.clone());
             }
             ans.push(curr);
         }
@@ -86,5 +85,19 @@ impl Job {
         }
 
         Ok(ans)
+    }
+
+    pub fn get_ready_tasks(&self) -> Vec<&TaskId> {
+        self.tasks.iter().filter(|(_, task)| {
+            matches!(task.state, TaskState::Pending) && 
+            task.spec.depends_on.iter().all(|dep_id| {
+                matches!(
+                    self.tasks.get(dep_id).map(|t| &t.state),
+                    Some(TaskState::Completed { .. })
+                )
+            })
+        })
+        .map(|(id, _)| id)
+        .collect()
     }
 }

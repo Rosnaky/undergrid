@@ -1,5 +1,7 @@
 use std::{collections::HashMap, time::{Duration, Instant}};
 
+use crate::task::task_error::TaskError;
+pub mod task_error;
 
 pub type TaskId = String;
 pub type HealthCheck = String;
@@ -83,4 +85,16 @@ pub struct TaskSpec {
 pub struct Task {
     pub spec: TaskSpec,
     pub state: TaskState,
+}
+
+impl Task {
+    pub fn complete_task(&mut self, output: TaskOutput) -> Result<(), TaskError> {
+        let duration = match &self.state {
+            TaskState::Running { started_at, .. } => started_at.elapsed(),
+            _ => return Err(TaskError::InvalidStateTransition("Task is currently running".to_string())),
+        };
+
+        self.state = TaskState::Completed { output, duration };
+        Ok(())
+    }
 }
