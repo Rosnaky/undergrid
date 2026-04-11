@@ -8,6 +8,12 @@ use crate::{executor::executor_error::ExecutorError, task::{TaskKind, TaskOutput
 
 pub struct Executor;
 
+impl Default for Executor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Executor {
     pub fn new() -> Self {
         Self

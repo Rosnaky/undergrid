@@ -29,7 +29,7 @@ impl Scheduler for DrfScheduler {
             total_available_cpu += nr.available_cpu;
             total_available_memory_bytes += nr.available_memory_bytes;
             total_available_disk_bytes += nr.available_disk_bytes;
-            total_gpus += nr.available_gpu as u32;
+            total_gpus += nr.available_gpu;
         }
 
         // Compute dominant share
@@ -55,7 +55,7 @@ impl Scheduler for DrfScheduler {
         for (task_id, _) in dominant_shares.clone().into_sorted_iter() {
             match self.get_best_fit(
                 tasks.iter().find(|task| task.id == task_id).unwrap(),
-                &mut transformed_nodes,
+                &transformed_nodes,
             ) {
                 Ok(assignment) => {
                     // Subtract resources

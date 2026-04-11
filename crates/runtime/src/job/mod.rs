@@ -45,12 +45,12 @@ impl Job {
                 if !self.tasks.contains_key(dep) {
                     return Err(JobError::MissingDependency(k.clone(), dep.clone()));
                 }
-                dep_to_task_id.entry(dep.clone()).or_insert_with(Vec::new).push(k.clone());
+                dep_to_task_id.entry(dep.clone()).or_default().push(k.clone());
             }
         }
 
         for (k, v) in &task_id_to_indegree {
-            if v.clone() == 0 {
+            if *v == 0 {
                 queue.push_back(k.clone());
             }
         }
