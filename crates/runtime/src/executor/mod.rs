@@ -4,7 +4,10 @@ use std::process::Stdio;
 
 use tokio::process::Command;
 
-use crate::{executor::executor_error::ExecutorError, task::{TaskKind, TaskOutput, TaskSpec}};
+use crate::{
+    executor::executor_error::ExecutorError,
+    task::{TaskKind, TaskOutput, TaskSpec},
+};
 
 pub struct Executor;
 
@@ -22,14 +25,17 @@ impl Executor {
     pub async fn execute(&self, spec: &TaskSpec) -> Result<TaskOutput, ExecutorError> {
         // Pull image first
         self.pull_image(&spec.image).await?;
-        
+
         let container_name = format!("undergrid-{}", spec.id);
         let mut cmd = Command::new("docker");
         cmd.arg("run")
             .arg("--rm")
-            .arg("--cpus").arg(spec.resources.cpu_cores.to_string())
-            .arg("--memory").arg(format!("{}m", spec.resources.memory_bytes / 1_048_576))
-            .arg("--name").arg(&container_name);
+            .arg("--cpus")
+            .arg(spec.resources.cpu_cores.to_string())
+            .arg("--memory")
+            .arg(format!("{}m", spec.resources.memory_bytes / 1_048_576))
+            .arg("--name")
+            .arg(&container_name);
 
         for (k, v) in &spec.env {
             cmd.arg("-e").arg(format!("{}={}", k, v));
@@ -37,25 +43,27 @@ impl Executor {
 
         if let TaskKind::Service { port, .. } = &spec.kind {
             for mapping in port {
-                cmd.arg("-p").arg(format!("{}:{}", mapping.container_port, mapping.container_port));
+                cmd.arg("-p").arg(format!(
+                    "{}:{}",
+                    mapping.container_port, mapping.container_port
+                ));
             }
         }
-        
+
         cmd.arg(&spec.image);
         for c in &spec.command {
             cmd.arg(c);
         }
 
-        cmd.stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
         // Timeout
         match &spec.kind {
             TaskKind::Batch { timeout } => {
                 match tokio::time::timeout(*timeout, cmd.output()).await {
                     Ok(result) => {
-                        let output = result
-                            .map_err(|e| ExecutorError::ExecutionFailed(e.to_string()))?;
+                        let output =
+                            result.map_err(|e| ExecutorError::ExecutionFailed(e.to_string()))?;
 
                         Ok(TaskOutput {
                             stdout: output.stdout,
@@ -64,7 +72,8 @@ impl Executor {
                     }
                     Err(_) => {
                         let _ = Command::new("docker")
-                            .arg("kill").arg(&container_name)
+                            .arg("kill")
+                            .arg(&container_name)
                             .output()
                             .await;
                         Err(ExecutorError::Timeout)
@@ -73,7 +82,9 @@ impl Executor {
             }
             TaskKind::Service { .. } => {
                 // TODO: Implement detached
-                Err(ExecutorError::ExecutionFailed("Services not yet implemented".to_string()))
+                Err(ExecutorError::ExecutionFailed(
+                    "Services not yet implemented".to_string(),
+                ))
             }
         }
     }
@@ -88,7 +99,7 @@ impl Executor {
 
         if !output.status.success() {
             return Err(ExecutorError::ImagePullFailed(
-                String::from_utf8_lossy(&output.stderr).to_string()
+                String::from_utf8_lossy(&output.stderr).to_string(),
             ));
         }
 

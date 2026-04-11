@@ -1,4 +1,7 @@
-use std::{collections::HashMap, time::{Duration, Instant}};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use crate::task::task_error::TaskError;
 pub mod task_error;
@@ -8,16 +11,14 @@ pub type HealthCheck = String;
 
 pub enum TaskKind {
     /// Run to completion
-    Batch {
-        timeout: Duration,
-    },
+    Batch { timeout: Duration },
     Service {
         /// Health check endpoint
         health_check: Option<HealthCheck>,
         restart_policy: RestartPolicy,
         /// Ports to expose
         port: Vec<PortMapping>,
-    }
+    },
 }
 
 pub enum Protocol {
@@ -66,7 +67,7 @@ pub enum TaskState {
     Failed {
         error: String,
         duration: Duration,
-    }
+    },
 }
 pub struct TaskSpec {
     pub id: TaskId,
@@ -91,7 +92,11 @@ impl Task {
     pub fn complete_task(&mut self, output: TaskOutput) -> Result<(), TaskError> {
         let duration = match &self.state {
             TaskState::Running { started_at, .. } => started_at.elapsed(),
-            _ => return Err(TaskError::InvalidStateTransition("Task is currently running".to_string())),
+            _ => {
+                return Err(TaskError::InvalidStateTransition(
+                    "Task is currently running".to_string(),
+                ));
+            }
         };
 
         self.state = TaskState::Completed { output, duration };

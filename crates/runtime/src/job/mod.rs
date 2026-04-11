@@ -1,4 +1,3 @@
-
 pub mod job_error;
 
 use crate::job::job_error::JobError;
@@ -17,10 +16,7 @@ pub enum JobState {
     Ready,
     Running { started_at: Instant },
     Completed { duration: Duration },
-    Failed {
-        error: String,
-        duration: Duration,
-    }
+    Failed { error: String, duration: Duration },
 }
 
 pub struct Job {
@@ -39,13 +35,16 @@ impl Job {
         for (k, v) in &self.tasks {
             // Update indegree
             task_id_to_indegree.insert(k.to_string(), v.spec.depends_on.len() as u64);
-            
+
             // Update adj matrix
             for dep in &v.spec.depends_on {
                 if !self.tasks.contains_key(dep) {
                     return Err(JobError::MissingDependency(k.clone(), dep.clone()));
                 }
-                dep_to_task_id.entry(dep.clone()).or_default().push(k.clone());
+                dep_to_task_id
+                    .entry(dep.clone())
+                    .or_default()
+                    .push(k.clone());
             }
         }
 
@@ -71,7 +70,6 @@ impl Job {
                             queue.push_back(dep.clone());
                         }
                     }
-
                 }
                 curr.push(id.clone());
             }
@@ -87,16 +85,18 @@ impl Job {
     }
 
     pub fn get_ready_tasks(&self) -> Vec<&TaskId> {
-        self.tasks.iter().filter(|(_, task)| {
-            matches!(task.state, TaskState::Pending) && 
-            task.spec.depends_on.iter().all(|dep_id| {
-                matches!(
-                    self.tasks.get(dep_id).map(|t| &t.state),
-                    Some(TaskState::Completed { .. })
-                )
+        self.tasks
+            .iter()
+            .filter(|(_, task)| {
+                matches!(task.state, TaskState::Pending)
+                    && task.spec.depends_on.iter().all(|dep_id| {
+                        matches!(
+                            self.tasks.get(dep_id).map(|t| &t.state),
+                            Some(TaskState::Completed { .. })
+                        )
+                    })
             })
-        })
-        .map(|(id, _)| id)
-        .collect()
+            .map(|(id, _)| id)
+            .collect()
     }
 }

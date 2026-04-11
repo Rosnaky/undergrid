@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::time::Duration;
 use runtime::job::Job;
 use runtime::job::JobState;
 use runtime::job::job_error::JobError;
@@ -10,6 +8,8 @@ use runtime::task::TaskKind;
 use runtime::task::TaskOutput;
 use runtime::task::TaskSpec;
 use runtime::task::TaskState;
+use std::collections::HashMap;
+use std::time::Duration;
 
 fn make_task(id: &str, deps: Vec<&str>) -> (TaskId, Task) {
     (
@@ -96,10 +96,7 @@ fn validate_independent_tasks_single_level() {
 
 #[test]
 fn validate_detects_cycle() {
-    let job = make_job(vec![
-        make_task("a", vec!["b"]),
-        make_task("b", vec!["a"]),
-    ]);
+    let job = make_job(vec![make_task("a", vec!["b"]), make_task("b", vec!["a"])]);
 
     let result = job.validate();
     assert!(matches!(result, Err(JobError::CycleDetected)));
@@ -107,9 +104,7 @@ fn validate_detects_cycle() {
 
 #[test]
 fn validate_detects_missing_dependency() {
-    let job = make_job(vec![
-        make_task("a", vec!["nonexistent"]),
-    ]);
+    let job = make_job(vec![make_task("a", vec!["nonexistent"])]);
 
     let result = job.validate();
     assert!(matches!(result, Err(JobError::MissingDependency(_, _))));
@@ -126,10 +121,7 @@ fn validate_empty_job() {
 
 #[test]
 fn ready_tasks_returns_roots_initially() {
-    let job = make_job(vec![
-        make_task("a", vec![]),
-        make_task("b", vec!["a"]),
-    ]);
+    let job = make_job(vec![make_task("a", vec![]), make_task("b", vec!["a"])]);
 
     let ready = job.get_ready_tasks();
     // a has no deps and is Pending → ready
@@ -147,13 +139,20 @@ fn ready_tasks_unblocks_after_completion() {
     ]);
 
     // Complete task a
-    job.tasks.get_mut("a").unwrap().complete_task(TaskOutput {
-        stdout: vec![],
-        exit_code: 0,
-    }).ok(); // will error since not Running, so set state manually:
+    job.tasks
+        .get_mut("a")
+        .unwrap()
+        .complete_task(TaskOutput {
+            stdout: vec![],
+            exit_code: 0,
+        })
+        .ok(); // will error since not Running, so set state manually:
 
     job.tasks.get_mut("a").unwrap().state = TaskState::Completed {
-        output: TaskOutput { stdout: vec![], exit_code: 0 },
+        output: TaskOutput {
+            stdout: vec![],
+            exit_code: 0,
+        },
         duration: Duration::from_secs(1),
     };
 
@@ -165,10 +164,7 @@ fn ready_tasks_unblocks_after_completion() {
 
 #[test]
 fn ready_tasks_blocked_when_dep_not_completed() {
-    let mut job = make_job(vec![
-        make_task("a", vec![]),
-        make_task("b", vec!["a"]),
-    ]);
+    let mut job = make_job(vec![make_task("a", vec![]), make_task("b", vec!["a"])]);
 
     // a is Running, not Completed
     job.tasks.get_mut("a").unwrap().state = TaskState::Running {
@@ -193,7 +189,10 @@ fn ready_tasks_partial_deps_completed() {
     // Complete a and b, but not c
     for id in &["a", "b"] {
         job.tasks.get_mut(*id).unwrap().state = TaskState::Completed {
-            output: TaskOutput { stdout: vec![], exit_code: 0 },
+            output: TaskOutput {
+                stdout: vec![],
+                exit_code: 0,
+            },
             duration: Duration::from_secs(1),
         };
     }

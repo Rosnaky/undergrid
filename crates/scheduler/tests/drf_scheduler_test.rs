@@ -1,6 +1,6 @@
+use runtime::task::*;
 use scheduler::drf::DrfScheduler;
 use scheduler::{NodeResources, Scheduler};
-use runtime::task::*;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -105,7 +105,7 @@ fn drf_schedules_smallest_dominant_share_first() {
     // t_cpu is cpu-dominant (needs 4 of 8 = 50% CPU, but little memory)
     // Both have same dominant share (50%), but the one with smaller share goes first
     // Make them unequal:
-    let t_small = make_spec("t_small", 1.0, 256, 500, false, vec![]);  // small dominant share
+    let t_small = make_spec("t_small", 1.0, 256, 500, false, vec![]); // small dominant share
     let t_large = make_spec("t_large", 4.0, 4096, 5000, false, vec![]); // large dominant share
     let nodes = vec![make_node("n1", 8.0, 8192, 80000, false)];
 

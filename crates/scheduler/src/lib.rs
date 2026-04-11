@@ -5,7 +5,6 @@ use runtime::task::{TaskId, TaskSpec};
 
 use crate::scheduler_error::SchedulerError;
 
-
 #[derive(Clone)]
 pub struct NodeResources {
     pub node_id: String,
