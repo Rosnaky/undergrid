@@ -49,7 +49,6 @@ impl Job {
             }
         }
 
-
         for (k, v) in &task_id_to_indegree {
             if v.clone() == 0 {
                 queue.push_back(k.clone());

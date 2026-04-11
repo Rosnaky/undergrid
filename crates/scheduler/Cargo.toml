@@ -4,3 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+ordered-float = "5.3.0"
+priority-queue = "2.7.0"
+runtime = { version = "0.1.0", path = "../runtime" }
