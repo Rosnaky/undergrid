@@ -18,7 +18,7 @@ fn make_spec(id: &str, cpu: f64, mem: u64, disk: u64, gpu: bool, deps: Vec<&str>
         },
         depends_on: deps.into_iter().map(String::from).collect(),
         kind: TaskKind::Batch {
-            timeout: Duration::from_secs(60),
+            timeout_s: Duration::from_secs(60),
         },
     }
 }

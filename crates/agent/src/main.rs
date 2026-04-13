@@ -3,14 +3,15 @@ use std::{net::SocketAddr, sync::Arc};
 use agent::{
     client::{client_pool::ClientPool, send_heartbeat},
     config::NodeConfig,
-    node::runner::handle_raft_tick,
-    node::state::NodeState,
+    node::{runner::handle_orchestrator_tick, runner::handle_raft_tick, state::NodeState},
+    orchestrator::Orchestrator,
     server::node_agent::NodeAgentService,
     system::SystemSnapshot,
 };
 use clap::Parser;
 use mesh::undergrid::node_agent_server::NodeAgentServer;
 use raft::Role;
+use scheduler::drf::DrfScheduler;
 use tokio::{signal, sync::RwLock};
 
 #[derive(Parser)]
@@ -59,12 +60,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     SystemSnapshot::display(&system_snapshot);
+    let orchestrator = Orchestrator::new(DrfScheduler);
 
     let state = Arc::new(RwLock::new(NodeState::new(
         config.node_id.clone(),
         system_snapshot.hostname.clone(),
         config.bind_address.clone(),
         config.port,
+        orchestrator,
     )));
     let heartbeat_state = Arc::clone(&state);
 
@@ -102,6 +105,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut monitor_interval = tokio::time::interval(std::time::Duration::from_secs(5));
 
     let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_millis(500));
+
+    let mut orchestrator_interval = tokio::time::interval(std::time::Duration::from_millis(500));
 
     agent::node::discovery::discover_peers(disc_state, disc_pool);
 
@@ -147,6 +152,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ = signal::ctrl_c() => {
                 tracing::info!("Received shutdown signal");
                 break;
+            }
+            _ = orchestrator_interval.tick() => {
+                handle_orchestrator_tick(&state, &client_pool).await;
             }
         }
     }

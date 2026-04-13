@@ -1,4 +1,5 @@
 use runtime::job::Job;
+use runtime::job::JobSpec;
 use runtime::job::JobState;
 use runtime::job::job_error::JobError;
 use runtime::task::ResourceRequirements;
@@ -28,7 +29,7 @@ fn make_task(id: &str, deps: Vec<&str>) -> (TaskId, Task) {
                 },
                 depends_on: deps.into_iter().map(String::from).collect(),
                 kind: TaskKind::Batch {
-                    timeout: Duration::from_secs(60),
+                    timeout_s: Duration::from_secs(60),
                 },
             },
             state: TaskState::Pending,
@@ -38,8 +39,10 @@ fn make_task(id: &str, deps: Vec<&str>) -> (TaskId, Task) {
 
 fn make_job(tasks: Vec<(TaskId, Task)>) -> Job {
     Job {
-        id: "test-job".to_string(),
-        tasks: tasks.into_iter().collect(),
+        spec: JobSpec {
+            id: "test-job".to_string(),
+            tasks: tasks.into_iter().collect(),
+        },
         state: JobState::Pending,
     }
 }
@@ -55,7 +58,7 @@ fn validate_passes_on_linear_graph() {
         make_task("c", vec!["b"]),
     ]);
 
-    let levels = job.validate().unwrap();
+    let levels = job.spec.validate().unwrap();
     assert_eq!(levels.len(), 3);
     assert_eq!(levels[0], vec!["a"]);
     assert_eq!(levels[1], vec!["b"]);
@@ -72,7 +75,7 @@ fn validate_passes_on_diamond_graph() {
         make_task("d", vec!["b", "c"]),
     ]);
 
-    let levels = job.validate().unwrap();
+    let levels = job.spec.validate().unwrap();
     assert_eq!(levels.len(), 3);
     assert_eq!(levels[0], vec!["a"]);
     assert!(levels[1].contains(&"b".to_string()));
@@ -89,7 +92,7 @@ fn validate_independent_tasks_single_level() {
         make_task("c", vec![]),
     ]);
 
-    let levels = job.validate().unwrap();
+    let levels = job.spec.validate().unwrap();
     assert_eq!(levels.len(), 1);
     assert_eq!(levels[0].len(), 3);
 }
@@ -98,7 +101,7 @@ fn validate_independent_tasks_single_level() {
 fn validate_detects_cycle() {
     let job = make_job(vec![make_task("a", vec!["b"]), make_task("b", vec!["a"])]);
 
-    let result = job.validate();
+    let result = job.spec.validate();
     assert!(matches!(result, Err(JobError::CycleDetected)));
 }
 
@@ -106,14 +109,14 @@ fn validate_detects_cycle() {
 fn validate_detects_missing_dependency() {
     let job = make_job(vec![make_task("a", vec!["nonexistent"])]);
 
-    let result = job.validate();
+    let result = job.spec.validate();
     assert!(matches!(result, Err(JobError::MissingDependency(_, _))));
 }
 
 #[test]
 fn validate_empty_job() {
     let job = make_job(vec![]);
-    let levels = job.validate().unwrap();
+    let levels = job.spec.validate().unwrap();
     assert!(levels.is_empty());
 }
 
@@ -139,7 +142,8 @@ fn ready_tasks_unblocks_after_completion() {
     ]);
 
     // Complete task a
-    job.tasks
+    job.spec
+        .tasks
         .get_mut("a")
         .unwrap()
         .complete_task(TaskOutput {
@@ -148,7 +152,7 @@ fn ready_tasks_unblocks_after_completion() {
         })
         .ok(); // will error since not Running, so set state manually:
 
-    job.tasks.get_mut("a").unwrap().state = TaskState::Completed {
+    job.spec.tasks.get_mut("a").unwrap().state = TaskState::Completed {
         output: TaskOutput {
             stdout: vec![],
             exit_code: 0,
@@ -167,7 +171,7 @@ fn ready_tasks_blocked_when_dep_not_completed() {
     let mut job = make_job(vec![make_task("a", vec![]), make_task("b", vec!["a"])]);
 
     // a is Running, not Completed
-    job.tasks.get_mut("a").unwrap().state = TaskState::Running {
+    job.spec.tasks.get_mut("a").unwrap().state = TaskState::Running {
         node_id: "node-1".to_string(),
         started_at: std::time::Instant::now(),
     };
@@ -188,7 +192,7 @@ fn ready_tasks_partial_deps_completed() {
 
     // Complete a and b, but not c
     for id in &["a", "b"] {
-        job.tasks.get_mut(*id).unwrap().state = TaskState::Completed {
+        job.spec.tasks.get_mut(*id).unwrap().state = TaskState::Completed {
             output: TaskOutput {
                 stdout: vec![],
                 exit_code: 0,

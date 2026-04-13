@@ -1,18 +1,25 @@
-use std::{sync::Arc, time::Instant};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use mesh::undergrid::{
-    AddPeerRequest, AddPeerResponse, AppendEntriesRequest, AppendEntriesResponse, HeartbeatRequest,
-    HeartbeatResponse, NodeInfo, PingRequest, PingResponse, RegisterRequest, RegisterResponse,
-    RemovePeerRequest, RemovePeerResponse, ResourceSnapshot, VoteRequest, VoteResponse,
-    node_agent_server::NodeAgent,
+    AddPeerRequest, AddPeerResponse, AppendEntriesRequest, AppendEntriesResponse,
+    DispatchTaskRequest, DispatchTaskResponse, HeartbeatRequest, HeartbeatResponse, NodeInfo,
+    PingRequest, PingResponse, RegisterRequest, RegisterResponse, RemovePeerRequest,
+    RemovePeerResponse, ReportTaskResultRequest, ReportTaskResultResponse, ResourceSnapshot,
+    SubmitJobRequest, SubmitJobResponse, VoteRequest, VoteResponse, node_agent_server::NodeAgent,
 };
-use raft::RaftMessage;
+use raft::{RaftMessage, Role};
+use runtime::{
+    executor::Executor,
+    job::JobSpec,
+    task::{Task, TaskId, TaskOutput, TaskSpec},
+};
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
 use crate::{
-    client::{add_peer, client_pool::ClientPool},
+    client::{add_peer, client_pool::ClientPool, report_task_result},
     node::state::NodeState,
+    system::SystemSnapshot,
 };
 
 pub struct NodeAgentService {
@@ -146,7 +153,12 @@ impl NodeAgent for NodeAgentService {
         );
 
         let mut s = self.state.write().await;
-        s.raft.handle_heartbeat_response(req.node_id);
+        if let Some(resources) = req.resources {
+            s.peer_resources
+                .insert(req.node_id.clone(), SystemSnapshot::from(resources));
+            s.raft.handle_heartbeat_response(req.node_id);
+        }
+
         drop(s);
 
         Ok(Response::new(HeartbeatResponse { acknowledged: true }))
@@ -267,5 +279,134 @@ impl NodeAgent for NodeAgentService {
             }
             _ => Err(Status::internal("Unexpected raft message type")),
         }
+    }
+
+    async fn dispatch_task(
+        &self,
+        request: Request<DispatchTaskRequest>,
+    ) -> Result<Response<DispatchTaskResponse>, Status> {
+        let req = request.into_inner();
+        let mesh_task_spec = req
+            .task_spec
+            .ok_or_else(|| Status::invalid_argument("Missing task_spec"))?;
+        let task_spec = TaskSpec::try_from(mesh_task_spec).unwrap();
+        let job_id = req.job_id.clone();
+
+        let state = self.state.clone();
+
+        let pool = self.client_pool.clone();
+
+        tokio::spawn(async move {
+            let executor = Executor::new();
+            let result = executor.execute(&task_spec).await;
+
+            let (executed, error) = {
+                match result.clone() {
+                    Ok(_) => (true, String::new()),
+                    Err(e) => (false, e.to_string()),
+                }
+            };
+
+            let leader_addr: Option<String> = {
+                let s = state.read().await;
+                if matches!(s.raft.role, Role::Leader) {
+                    Some(format!("http://{}:{}", s.bind_address, s.port))
+                } else {
+                    s.raft
+                        .peers
+                        .iter()
+                        .find(|p| Some(&p.node_id) == s.raft.leader_id.as_ref())
+                        .map(|p| p.addr())
+                }
+            };
+
+            if let Some(addr) = leader_addr {
+                let _ = report_task_result(
+                    &pool,
+                    &addr,
+                    job_id,
+                    task_spec.id,
+                    result.unwrap_or_default(),
+                    executed,
+                    error,
+                )
+                .await;
+            }
+        });
+
+        Ok(Response::new(DispatchTaskResponse {
+            accepted: true,
+            error: String::new(),
+        }))
+    }
+
+    async fn submit_job(
+        &self,
+        request: Request<SubmitJobRequest>,
+    ) -> Result<Response<SubmitJobResponse>, Status> {
+        let req = request.into_inner();
+
+        let job_id = req.job_id;
+        let mesh_task_specs = req.tasks;
+        let task_specs: Vec<TaskSpec> = mesh_task_specs
+            .into_iter()
+            .map(|task| TaskSpec::try_from(task).unwrap())
+            .collect();
+        let tasks: HashMap<TaskId, Task> = task_specs
+            .into_iter()
+            .map(|spec| {
+                let task = Task::new(spec);
+                (task.spec.id.clone(), task)
+            })
+            .collect();
+
+        let job_spec = JobSpec { id: job_id, tasks };
+
+        let submit_job_res = {
+            let mut state = self.state.write().await;
+            state.orchestrator.submit_job(job_spec)
+        };
+
+        if let Err(e) = submit_job_res {
+            return Ok(Response::new(SubmitJobResponse {
+                accepted: false,
+                error: e.to_string(),
+            }));
+        }
+
+        Ok(Response::new(SubmitJobResponse {
+            accepted: true,
+            error: String::new(),
+        }))
+    }
+
+    async fn report_task_result(
+        &self,
+        request: Request<ReportTaskResultRequest>,
+    ) -> Result<Response<ReportTaskResultResponse>, Status> {
+        let req = request.into_inner();
+
+        let job_id = req.job_id;
+        let task_id = req.task_id as TaskId;
+        let proto_output = req
+            .output
+            .ok_or_else(|| Status::invalid_argument("Missing output"))?;
+        let task_output = TaskOutput::from(proto_output);
+        let success = task_output.exit_code == 0;
+
+        // Update task state and result
+        let mut state = self.state.write().await;
+        let _ = state
+            .orchestrator
+            .handle_task_result(&job_id, &task_id, success, task_output)
+            .map_err(|e| {
+                tracing::error!("Error occured when handling task result: {}", e.to_string())
+            });
+
+        state.orchestrator.complete_job(&job_id);
+
+        Ok(Response::new(ReportTaskResultResponse {
+            acknowledged: true,
+        }))
     }
 }

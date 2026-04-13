@@ -59,7 +59,7 @@ impl Executor {
 
         // Timeout
         match &spec.kind {
-            TaskKind::Batch { timeout } => {
+            TaskKind::Batch { timeout_s: timeout } => {
                 match tokio::time::timeout(*timeout, cmd.output()).await {
                     Ok(result) => {
                         let output =

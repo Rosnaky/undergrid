@@ -16,6 +16,8 @@ mesh = { version = "0.1.0", path = "../mesh" }
 nix = { version = "0.31.2", features = ["fs"] }
 prost = "0.14.3"
 raft = { version = "0.1.0", path = "../raft" }
+runtime = { version = "0.1.0", path = "../runtime" }
+scheduler = { version = "0.1.0", path = "../scheduler" }
 serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros", "time", "signal"] }
 toml = "1.1.0"

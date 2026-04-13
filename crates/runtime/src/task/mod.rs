@@ -9,9 +9,10 @@ pub mod task_error;
 pub type TaskId = String;
 pub type HealthCheck = String;
 
+#[derive(Clone)]
 pub enum TaskKind {
     /// Run to completion
-    Batch { timeout: Duration },
+    Batch { timeout_s: Duration },
     Service {
         /// Health check endpoint
         health_check: Option<HealthCheck>,
@@ -21,16 +22,19 @@ pub enum TaskKind {
     },
 }
 
+#[derive(Clone)]
 pub enum Protocol {
     UDP,
     TCP,
 }
 
+#[derive(Default, Clone)]
 pub struct TaskOutput {
     pub stdout: Vec<u8>,
     pub exit_code: i32,
 }
 
+#[derive(Clone)]
 pub enum RestartPolicy {
     Always,
     Retries {
@@ -41,11 +45,13 @@ pub enum RestartPolicy {
     None,
 }
 
+#[derive(Clone)]
 pub struct PortMapping {
     pub container_port: u16,
     pub protocol: Protocol,
 }
 
+#[derive(Clone)]
 pub struct ResourceRequirements {
     pub memory_bytes: u64,
     pub disk_bytes: u64,
@@ -55,7 +61,6 @@ pub struct ResourceRequirements {
 
 pub enum TaskState {
     Pending,
-    Ready,
     Running {
         node_id: String,
         started_at: Instant,
@@ -69,6 +74,8 @@ pub enum TaskState {
         duration: Duration,
     },
 }
+
+#[derive(Clone)]
 pub struct TaskSpec {
     pub id: TaskId,
     /// Docker image
@@ -89,6 +96,13 @@ pub struct Task {
 }
 
 impl Task {
+    pub fn new(spec: TaskSpec) -> Self {
+        Self {
+            spec,
+            state: TaskState::Pending,
+        }
+    }
+
     pub fn complete_task(&mut self, output: TaskOutput) -> Result<(), TaskError> {
         let duration = match &self.state {
             TaskState::Running { started_at, .. } => started_at.elapsed(),

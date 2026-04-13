@@ -13,19 +13,22 @@ pub type JobId = String;
 
 pub enum JobState {
     Pending,
-    Ready,
     Running { started_at: Instant },
     Completed { duration: Duration },
     Failed { error: String, duration: Duration },
 }
 
-pub struct Job {
+pub struct JobSpec {
     pub id: JobId,
     pub tasks: HashMap<TaskId, Task>,
+}
+
+pub struct Job {
+    pub spec: JobSpec,
     pub state: JobState,
 }
 
-impl Job {
+impl JobSpec {
     /// Uses Kahn's algorithm to create topological sort
     pub fn validate(&self) -> Result<Vec<Vec<TaskId>>, JobError> {
         let mut queue = VecDeque::new();
@@ -83,15 +86,18 @@ impl Job {
 
         Ok(ans)
     }
+}
 
+impl Job {
     pub fn get_ready_tasks(&self) -> Vec<&TaskId> {
-        self.tasks
+        self.spec
+            .tasks
             .iter()
             .filter(|(_, task)| {
                 matches!(task.state, TaskState::Pending)
                     && task.spec.depends_on.iter().all(|dep_id| {
                         matches!(
-                            self.tasks.get(dep_id).map(|t| &t.state),
+                            self.spec.tasks.get(dep_id).map(|t| &t.state),
                             Some(TaskState::Completed { .. })
                         )
                     })

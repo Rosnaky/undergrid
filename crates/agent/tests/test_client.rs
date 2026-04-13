@@ -1,3 +1,6 @@
+use agent::orchestrator::Orchestrator;
+use scheduler::drf::DrfScheduler;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -14,6 +17,7 @@ fn test_state(id: &str) -> Arc<RwLock<NodeState>> {
         "test-host".to_string(),
         "127.0.0.1".to_string(),
         7070,
+        Orchestrator::new(DrfScheduler),
     )))
 }
 
@@ -240,4 +244,247 @@ async fn remove_peer_works() {
     assert!(resp.success);
     let s = state.read().await;
     assert!(!s.raft.is_peer_by_node_id("node-2"));
+}
+
+fn make_proto_task(id: &str, deps: Vec<&str>) -> TaskSpec {
+    TaskSpec {
+        id: id.to_string(),
+        image: "alpine:latest".to_string(),
+        command: vec!["echo".to_string(), "hello".to_string()],
+        env: HashMap::new(),
+        cpu_cores: 1.0,
+        memory_bytes: 512,
+        disk_bytes: 1000,
+        gpu: false,
+        depends_on: deps.into_iter().map(String::from).collect(),
+        kind: Some(task_spec::Kind::Batch(Batch { timeout_s: 60 })),
+    }
+}
+
+#[tokio::test]
+async fn submit_job_accepted() {
+    let state = test_state("leader-1");
+    let service = NodeAgentService::new(state.clone());
+
+    let resp = service
+        .submit_job(Request::new(SubmitJobRequest {
+            job_id: "job-1".to_string(),
+            tasks: vec![
+                make_proto_task("a", vec![]),
+                make_proto_task("b", vec!["a"]),
+            ],
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(resp.accepted);
+    assert!(resp.error.is_empty());
+
+    let s = state.read().await;
+    assert!(s.orchestrator.jobs.contains_key("job-1"));
+}
+
+#[tokio::test]
+async fn submit_job_rejected_cycle() {
+    let state = test_state("leader-1");
+    let service = NodeAgentService::new(state.clone());
+
+    let resp = service
+        .submit_job(Request::new(SubmitJobRequest {
+            job_id: "job-1".to_string(),
+            tasks: vec![
+                make_proto_task("a", vec!["b"]),
+                make_proto_task("b", vec!["a"]),
+            ],
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(!resp.accepted);
+    assert!(!resp.error.is_empty());
+}
+
+#[tokio::test]
+async fn submit_job_rejected_missing_dep() {
+    let state = test_state("leader-1");
+    let service = NodeAgentService::new(state.clone());
+
+    let resp = service
+        .submit_job(Request::new(SubmitJobRequest {
+            job_id: "job-1".to_string(),
+            tasks: vec![make_proto_task("a", vec!["nonexistent"])],
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(!resp.accepted);
+}
+
+// ═══════════════════════════════════════════════════════════
+// REPORT TASK RESULT
+// ═══════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn report_task_result_updates_state() {
+    let state = test_state("leader-1");
+    let service = NodeAgentService::new(state.clone());
+
+    // Submit a job first
+    service
+        .submit_job(Request::new(SubmitJobRequest {
+            job_id: "job-1".to_string(),
+            tasks: vec![
+                make_proto_task("a", vec![]),
+                make_proto_task("b", vec!["a"]),
+            ],
+        }))
+        .await
+        .unwrap();
+
+    // Manually set task a to Running so report_task_result works
+    {
+        let mut s = state.write().await;
+        if let Some(job) = s.orchestrator.jobs.get_mut("job-1") {
+            if let Some(task) = job.spec.tasks.get_mut("a") {
+                task.state = runtime::task::TaskState::Running {
+                    node_id: "leader-1".to_string(),
+                    started_at: std::time::Instant::now(),
+                };
+            }
+            job.state = runtime::job::JobState::Running {
+                started_at: std::time::Instant::now(),
+            };
+        }
+    }
+
+    // Report success
+    let resp = service
+        .report_task_result(Request::new(ReportTaskResultRequest {
+            job_id: "job-1".to_string(),
+            task_id: "a".to_string(),
+            output: Some(TaskOutput {
+                stdout: b"done".to_vec(),
+                exit_code: 0,
+            }),
+            executed: true,
+            error: String::new(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(resp.acknowledged);
+
+    // Task a should be Completed
+    let s = state.read().await;
+    let job = &s.orchestrator.jobs["job-1"];
+    assert!(matches!(
+        job.spec.tasks["a"].state,
+        runtime::task::TaskState::Completed { .. }
+    ));
+}
+
+#[tokio::test]
+async fn report_task_result_completes_job() {
+    let state = test_state("leader-1");
+    let service = NodeAgentService::new(state.clone());
+
+    // Submit single-task job
+    service
+        .submit_job(Request::new(SubmitJobRequest {
+            job_id: "job-1".to_string(),
+            tasks: vec![make_proto_task("a", vec![])],
+        }))
+        .await
+        .unwrap();
+
+    // Set task to Running and job to Running
+    {
+        let mut s = state.write().await;
+        if let Some(job) = s.orchestrator.jobs.get_mut("job-1") {
+            if let Some(task) = job.spec.tasks.get_mut("a") {
+                task.state = runtime::task::TaskState::Running {
+                    node_id: "leader-1".to_string(),
+                    started_at: std::time::Instant::now(),
+                };
+            }
+            job.state = runtime::job::JobState::Running {
+                started_at: std::time::Instant::now(),
+            };
+        }
+    }
+
+    // Report success
+    service
+        .report_task_result(Request::new(ReportTaskResultRequest {
+            job_id: "job-1".to_string(),
+            task_id: "a".to_string(),
+            output: Some(TaskOutput {
+                stdout: vec![],
+                exit_code: 0,
+            }),
+            executed: true,
+            error: String::new(),
+        }))
+        .await
+        .unwrap();
+
+    // Job should be Completed
+    let s = state.read().await;
+    assert!(matches!(
+        s.orchestrator.jobs["job-1"].state,
+        runtime::job::JobState::Completed { .. }
+    ));
+}
+
+#[tokio::test]
+async fn report_failed_task_marks_job_failed() {
+    let state = test_state("leader-1");
+    let service = NodeAgentService::new(state.clone());
+
+    service
+        .submit_job(Request::new(SubmitJobRequest {
+            job_id: "job-1".to_string(),
+            tasks: vec![make_proto_task("a", vec![])],
+        }))
+        .await
+        .unwrap();
+
+    {
+        let mut s = state.write().await;
+        if let Some(job) = s.orchestrator.jobs.get_mut("job-1") {
+            if let Some(task) = job.spec.tasks.get_mut("a") {
+                task.state = runtime::task::TaskState::Running {
+                    node_id: "leader-1".to_string(),
+                    started_at: std::time::Instant::now(),
+                };
+            }
+            job.state = runtime::job::JobState::Running {
+                started_at: std::time::Instant::now(),
+            };
+        }
+    }
+
+    service
+        .report_task_result(Request::new(ReportTaskResultRequest {
+            job_id: "job-1".to_string(),
+            task_id: "a".to_string(),
+            output: Some(TaskOutput {
+                stdout: vec![],
+                exit_code: 1,
+            }),
+            executed: true,
+            error: "segfault".to_string(),
+        }))
+        .await
+        .unwrap();
+
+    let s = state.read().await;
+    assert!(matches!(
+        s.orchestrator.jobs["job-1"].state,
+        runtime::job::JobState::Failed { .. }
+    ));
 }
