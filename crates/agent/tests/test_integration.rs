@@ -1,5 +1,10 @@
 use agent::defines::OFFLINE_TIMEOUT_MS;
+use agent::orchestrator::Orchestrator;
+use agent::system::{CpuInfo, DiskInfo, MemoryInfo, SystemSnapshot};
+use mesh::undergrid::{Batch, TaskSpec, task_spec};
 use raft::Peer;
+use scheduler::drf::DrfScheduler;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
@@ -40,6 +45,42 @@ async fn backdate_peer_last_seen(
     }
 }
 
+fn make_proto_task(id: &str, deps: Vec<&str>) -> TaskSpec {
+    TaskSpec {
+        id: id.to_string(),
+        image: "alpine:latest".to_string(),
+        command: vec!["echo".to_string(), "hello".to_string()],
+        env: HashMap::new(),
+        cpu_cores: 1.0,
+        memory_bytes: 512,
+        disk_bytes: 1000,
+        gpu: false,
+        depends_on: deps.into_iter().map(String::from).collect(),
+        kind: Some(task_spec::Kind::Batch(Batch { timeout_s: 60 })),
+    }
+}
+
+async fn set_fake_resources(state: &Arc<RwLock<NodeState>>) {
+    let mut s = state.write().await;
+    s.last_snapshot = Some(SystemSnapshot {
+        cpu: CpuInfo {
+            cpu_cores: 4,
+            cpu_usage_pct: 10.0,
+            cpu_freq_mhz: 1.0,
+        },
+        memory: MemoryInfo {
+            memory_total_bytes: 8_000_000,
+            memory_available_bytes: 6_000_000,
+        },
+        disk: DiskInfo {
+            disk_total_bytes: 100_000_000,
+            disk_available_bytes: 80_000_000,
+        },
+        gpu: None,
+        hostname: "0.0.0.0".to_string(),
+    });
+}
+
 // ── Test Node ────────────────────────────────────────────
 
 struct TestNode {
@@ -55,6 +96,7 @@ async fn start_node(id: &str, port: u16) -> TestNode {
         "test-host".to_string(),
         "127.0.0.1".to_string(),
         port,
+        Orchestrator::new(DrfScheduler),
     )));
 
     let service = NodeAgentService::new(state.clone());
@@ -1257,4 +1299,141 @@ async fn only_leader_triggers_offline_removal() {
 
     shutdown_node(other1);
     shutdown_node(other2);
+}
+
+// ═══════════════════════════════════════════════════════════
+// ORCHESTRATOR TICK
+// ═══════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn orchestrator_tick_dispatches_ready_tasks() {
+    let (n1, n2, n3, pool) = start_3_node_cluster().await;
+
+    // Set fake resources on all nodes
+    set_fake_resources(&n1.state).await;
+    set_fake_resources(&n2.state).await;
+    set_fake_resources(&n3.state).await;
+
+    // Elect a leader
+    run_raft_ticks(
+        &[&n1.state, &n2.state, &n3.state],
+        &pool,
+        Duration::from_secs(2),
+    )
+    .await;
+
+    // Find leader
+    let leader_state = if matches!(get_role(&n1.state).await, raft::Role::Leader) {
+        n1.state.clone()
+    } else if matches!(get_role(&n2.state).await, raft::Role::Leader) {
+        n2.state.clone()
+    } else {
+        n3.state.clone()
+    };
+
+    // Submit a job directly to orchestrator
+    {
+        let mut s = leader_state.write().await;
+        let tasks = vec![
+            make_proto_task("a", vec![]),
+            make_proto_task("b", vec!["a"]),
+        ];
+        let task_specs: Vec<runtime::task::TaskSpec> = tasks
+            .into_iter()
+            .map(|t| runtime::task::TaskSpec::try_from(t).unwrap())
+            .collect();
+        let task_map: HashMap<String, runtime::task::Task> = task_specs
+            .into_iter()
+            .map(|spec| {
+                let task = runtime::task::Task::new(spec);
+                (task.spec.id.clone(), task)
+            })
+            .collect();
+        s.orchestrator
+            .submit_job(runtime::job::JobSpec {
+                id: "job-1".to_string(),
+                tasks: task_map,
+            })
+            .unwrap();
+    }
+
+    // Run orchestrator tick — should schedule task a
+    agent::node::runner::handle_orchestrator_tick(&leader_state, &pool).await;
+
+    // Task a should now be Running
+    let s = leader_state.read().await;
+    let job = &s.orchestrator.jobs["job-1"];
+    assert!(
+        matches!(
+            job.spec.tasks["a"].state,
+            runtime::task::TaskState::Running { .. }
+        ),
+        "Task a should be Running after orchestrator tick"
+    );
+    assert!(
+        matches!(job.spec.tasks["b"].state, runtime::task::TaskState::Pending),
+        "Task b should still be Pending"
+    );
+
+    shutdown_node(n1);
+    shutdown_node(n2);
+    shutdown_node(n3);
+}
+
+#[tokio::test]
+async fn orchestrator_tick_skipped_on_follower() {
+    let (n1, n2, n3, pool) = start_3_node_cluster().await;
+
+    set_fake_resources(&n1.state).await;
+    set_fake_resources(&n2.state).await;
+    set_fake_resources(&n3.state).await;
+
+    run_raft_ticks(
+        &[&n1.state, &n2.state, &n3.state],
+        &pool,
+        Duration::from_secs(2),
+    )
+    .await;
+
+    // Find a follower
+    let follower_state = if !matches!(get_role(&n1.state).await, raft::Role::Leader) {
+        &n1.state.clone()
+    } else if !matches!(get_role(&n2.state).await, raft::Role::Leader) {
+        &n2.state.clone()
+    } else {
+        &n3.state.clone()
+    };
+
+    // Submit job directly to follower's orchestrator
+    {
+        let mut s = follower_state.write().await;
+        let task_map: HashMap<String, runtime::task::Task> = vec![(
+            "a".to_string(),
+            runtime::task::Task::new(
+                runtime::task::TaskSpec::try_from(make_proto_task("a", vec![])).unwrap(),
+            ),
+        )]
+        .into_iter()
+        .collect();
+        s.orchestrator
+            .submit_job(runtime::job::JobSpec {
+                id: "job-1".to_string(),
+                tasks: task_map,
+            })
+            .unwrap();
+    }
+
+    // Orchestrator tick on follower should be a no-op
+    agent::node::runner::handle_orchestrator_tick(follower_state, &pool).await;
+
+    let s = follower_state.read().await;
+    let job = &s.orchestrator.jobs["job-1"];
+    assert!(
+        matches!(job.spec.tasks["a"].state, runtime::task::TaskState::Pending),
+        "Follower should not schedule tasks"
+    );
+
+    shutdown_node(n1);
+    shutdown_node(n2);
+    shutdown_node(n3);
 }

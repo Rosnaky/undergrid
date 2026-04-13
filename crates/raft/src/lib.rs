@@ -121,6 +121,13 @@ impl RaftNode {
         self.peers.iter().any(|peer| peer.addr() == addr)
     }
 
+    pub fn get_peer_addr(&self, node_id: &str) -> Option<String> {
+        self.peers
+            .iter()
+            .find(|peer| peer.node_id == node_id)
+            .map(|peer| peer.addr())
+    }
+
     pub fn handle_offline_timeout(&mut self, now: Instant, timeout_ms: u64) -> Vec<RaftMessage> {
         let offline_timeout = Duration::from_millis(timeout_ms);
 

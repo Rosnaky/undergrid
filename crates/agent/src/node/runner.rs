@@ -1,10 +1,14 @@
 use std::{sync::Arc, time::Instant};
 
 use raft::{RaftMessage, Role};
+use runtime::task::TaskSpec;
+use scheduler::NodeResources;
 use tokio::sync::RwLock;
 
 use crate::{
-    client::{client_pool::ClientPool, remove_peer, send_append_entries, send_vote_request},
+    client::{
+        client_pool::ClientPool, dispatch_task, remove_peer, send_append_entries, send_vote_request,
+    },
     defines::OFFLINE_TIMEOUT_MS,
     node::state::NodeState,
 };
@@ -159,6 +163,69 @@ pub async fn handle_raft_tick(state: &Arc<RwLock<NodeState>>, pool: &ClientPool)
                     tracing::warn!("AppendEntries task panicked: {}", e);
                 }
             }
+        }
+    }
+}
+
+pub async fn handle_orchestrator_tick(state: &Arc<RwLock<NodeState>>, pool: &ClientPool) {
+    let to_dispatch: Vec<(String, TaskSpec, String)> = {
+        let s = state.read().await;
+
+        if !matches!(s.raft.role, raft::Role::Leader) {
+            return;
+        }
+
+        let nodes: Vec<NodeResources> = {
+            let mut resources = Vec::new();
+
+            if let Some(ref snapshot) = s.last_snapshot {
+                resources.push(NodeResources {
+                    node_id: s.raft.node_id.clone(),
+                    available_cpu: snapshot.cpu.cpu_cores as f64,
+                    available_memory_bytes: snapshot.memory.memory_available_bytes,
+                    available_disk_bytes: snapshot.disk.disk_available_bytes,
+                    available_gpu: 0,
+                });
+            }
+
+            for (node_id, snapshot) in &s.peer_resources {
+                resources.push(NodeResources {
+                    node_id: node_id.clone(),
+                    available_cpu: snapshot.cpu.cpu_cores as f64,
+                    available_memory_bytes: snapshot.memory.memory_available_bytes,
+                    available_disk_bytes: snapshot.disk.disk_available_bytes,
+                    available_gpu: 0,
+                });
+            }
+
+            resources
+        };
+
+        let mut all_dispatches = Vec::new();
+
+        let job_ids: Vec<String> = s.orchestrator.jobs.keys().cloned().collect();
+        drop(s);
+
+        {
+            let mut s = state.write().await;
+            for job_id in &job_ids {
+                let dispatches = s.orchestrator.schedule_ready_tasks(job_id, &nodes);
+                for (spec, node_id) in dispatches {
+                    all_dispatches.push((job_id.clone(), spec, node_id));
+                }
+            }
+        }
+
+        all_dispatches
+    };
+
+    for (job_id, spec, node_id) in to_dispatch {
+        let addr = {
+            let s = state.read().await;
+            s.raft.get_peer_addr(&node_id)
+        };
+        if let Some(addr) = addr {
+            let _ = dispatch_task(pool, &addr, job_id, spec).await;
         }
     }
 }

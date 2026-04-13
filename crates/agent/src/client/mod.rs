@@ -4,9 +4,15 @@ pub mod client_pool;
 use std::sync::Arc;
 
 use mesh::undergrid::{
-    AddPeerRequest, AddPeerResponse, AppendEntriesRequest, AppendEntriesResponse, HeartbeatRequest,
-    HeartbeatResponse, NodeInfo, RegisterRequest, RegisterResponse, RemovePeerRequest,
-    RemovePeerResponse, ResourceSnapshot, VoteRequest, VoteResponse,
+    AddPeerRequest, AddPeerResponse, AppendEntriesRequest, AppendEntriesResponse,
+    DispatchTaskRequest, DispatchTaskResponse, HeartbeatRequest, HeartbeatResponse, NodeInfo,
+    RegisterRequest, RegisterResponse, RemovePeerRequest, RemovePeerResponse,
+    ReportTaskResultRequest, ReportTaskResultResponse, ResourceSnapshot, SubmitJobRequest,
+    SubmitJobResponse, VoteRequest, VoteResponse,
+};
+use runtime::{
+    job::JobId,
+    task::{TaskId, TaskOutput, TaskSpec},
 };
 use tokio::sync::RwLock;
 
@@ -150,6 +156,84 @@ pub async fn remove_peer(
 
     let response = client
         .remove_peer(request)
+        .await
+        .map_err(|e| ClientError::QueryError(e.to_string()))?;
+
+    Ok(response.into_inner())
+}
+
+pub async fn submit_job(
+    pool: &ClientPool,
+    addr: &str,
+    job_id: JobId,
+    task_specs: Vec<TaskSpec>,
+) -> Result<SubmitJobResponse, ClientError> {
+    let mut client = pool.get(addr).await?;
+
+    let mesh_task_specs = task_specs
+        .into_iter()
+        .map(mesh::undergrid::TaskSpec::from)
+        .collect();
+
+    let request = SubmitJobRequest {
+        job_id,
+        tasks: mesh_task_specs,
+    };
+
+    let response = client
+        .submit_job(request)
+        .await
+        .map_err(|e| ClientError::QueryError(e.to_string()))?;
+
+    Ok(response.into_inner())
+}
+
+pub async fn dispatch_task(
+    pool: &ClientPool,
+    addr: &str,
+    job_id: JobId,
+    task_spec: TaskSpec,
+) -> Result<DispatchTaskResponse, ClientError> {
+    let mut client = pool.get(addr).await?;
+
+    let mesh_task_spec = mesh::undergrid::TaskSpec::from(task_spec);
+
+    let request = DispatchTaskRequest {
+        job_id,
+        task_spec: Some(mesh_task_spec),
+    };
+
+    let response = client
+        .dispatch_task(request)
+        .await
+        .map_err(|e| ClientError::QueryError(e.to_string()))?;
+
+    Ok(response.into_inner())
+}
+
+pub async fn report_task_result(
+    pool: &ClientPool,
+    addr: &str,
+    job_id: JobId,
+    task_id: TaskId,
+    output: TaskOutput,
+    executed: bool,
+    error: String,
+) -> Result<ReportTaskResultResponse, ClientError> {
+    let mut client = pool.get(addr).await?;
+
+    let mesh_output = mesh::undergrid::TaskOutput::from(output);
+
+    let request = ReportTaskResultRequest {
+        job_id,
+        task_id,
+        output: Some(mesh_output),
+        executed,
+        error,
+    };
+
+    let response = client
+        .report_task_result(request)
         .await
         .map_err(|e| ClientError::QueryError(e.to_string()))?;
 

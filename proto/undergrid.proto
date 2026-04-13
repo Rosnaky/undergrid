@@ -21,6 +21,54 @@ message NodeInfo {
     ResourceSnapshot resources = 5;
 }
 
+message Batch {
+    uint64 timeout_s = 1;
+}
+
+enum RestartPolicy {
+    ALWAYS = 0;
+    RETRIES = 1;
+    NONE = 2;
+}
+
+message RestartConfig {
+    RestartPolicy policy = 1;
+    uint64 max_retries = 2;
+    uint64 retry_delay_s = 3;
+}
+
+message PortMapping {
+    uint32 container_port = 1;
+    string protocol = 2;
+}
+
+message Service {
+    string health_check = 1;
+    RestartConfig restart_config = 2;
+    repeated PortMapping ports = 5;
+}
+
+message TaskSpec {
+    string id = 1;
+    string image = 2;
+    repeated string command = 3;
+    map<string, string> env = 4;
+    double cpu_cores = 5;
+    uint64 memory_bytes = 6;
+    uint64 disk_bytes = 7;
+    bool gpu = 8;
+    repeated string depends_on = 9;
+    oneof kind {
+        Batch batch = 10;
+        Service service = 11;
+    }
+}
+
+message TaskOutput {
+    bytes stdout = 1;
+    int32 exit_code = 2;
+}
+
 // Ping
 
 message PingRequest {
@@ -102,6 +150,44 @@ message RemovePeerResponse {
     bool success = 1;
 }
 
+// Submit Job Request
+
+message SubmitJobRequest {
+    string job_id = 1;
+    repeated TaskSpec tasks = 2;
+}
+
+message SubmitJobResponse {
+    bool accepted = 1;
+    string error = 2;
+}
+
+// Task Dispatch
+
+message DispatchTaskRequest {
+    string job_id = 1;
+    TaskSpec task_spec = 2;
+}
+
+message DispatchTaskResponse {
+    bool accepted = 1;
+    string error = 2;
+}
+
+// Task Result
+
+message ReportTaskResultRequest {
+    string job_id = 1;
+    string task_id = 2;
+    TaskOutput output = 3;
+    bool executed = 4;
+    string error = 5;
+}
+
+message ReportTaskResultResponse {
+    bool acknowledged = 1;
+}
+
 service NodeAgent {
     rpc Ping (PingRequest) returns (PingResponse);
     rpc Register (RegisterRequest) returns (RegisterResponse);
@@ -110,4 +196,7 @@ service NodeAgent {
     rpc AppendEntries (AppendEntriesRequest) returns (AppendEntriesResponse);
     rpc AddPeer (AddPeerRequest) returns (AddPeerResponse);
     rpc RemovePeer (RemovePeerRequest) returns (RemovePeerResponse);
+    rpc SubmitJob (SubmitJobRequest) returns (SubmitJobResponse);
+    rpc DispatchTask (DispatchTaskRequest) returns (DispatchTaskResponse);
+    rpc ReportTaskResult (ReportTaskResultRequest) returns (ReportTaskResultResponse);
 }
