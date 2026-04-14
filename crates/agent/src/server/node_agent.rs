@@ -17,7 +17,7 @@ use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
 use crate::{
-    client::{add_peer, client_pool::ClientPool, report_task_result},
+    client::{add_peer, client_pool::ClientPool, report_task_result, submit_job},
     node::state::NodeState,
     system::SystemSnapshot,
 };
@@ -300,6 +300,8 @@ impl NodeAgent for NodeAgentService {
             let executor = Executor::new();
             let result = executor.execute(&task_spec).await;
 
+            tracing::info!("Running task {}.", task_spec.id.clone());
+
             let (executed, error) = {
                 match result.clone() {
                     Ok(_) => (true, String::new()),
@@ -320,10 +322,16 @@ impl NodeAgent for NodeAgentService {
                 }
             };
 
+            let node_id: String = {
+                let s = state.read().await;
+                s.raft.node_id.clone()
+            };
+
             if let Some(addr) = leader_addr {
                 let _ = report_task_result(
                     &pool,
                     &addr,
+                    node_id,
                     job_id,
                     task_spec.id,
                     result.unwrap_or_default(),
@@ -352,6 +360,33 @@ impl NodeAgent for NodeAgentService {
             .into_iter()
             .map(|task| TaskSpec::try_from(task).unwrap())
             .collect();
+
+        {
+            let s = self.state.read().await;
+
+            if !matches!(s.raft.role, Role::Leader) {
+                let leader_addr = s
+                    .raft
+                    .peers
+                    .iter()
+                    .find(|p| Some(&p.node_id) == s.raft.leader_id.as_ref())
+                    .map(|p| format!("http://{}:{}", p.ip_address, p.port));
+                drop(s);
+
+                if let Some(addr) = leader_addr {
+                    return match submit_job(&self.client_pool, &addr, job_id, task_specs).await {
+                        Ok(resp) => Ok(Response::new(resp)),
+                        Err(e) => Err(Status::internal(e.to_string())),
+                    };
+                } else {
+                    return Ok(Response::new(SubmitJobResponse {
+                        accepted: false,
+                        error: "No leader found to submit job to.".to_string(),
+                    }));
+                }
+            }
+        }
+
         let tasks: HashMap<TaskId, Task> = task_specs
             .into_iter()
             .map(|spec| {
@@ -359,8 +394,10 @@ impl NodeAgent for NodeAgentService {
                 (task.spec.id.clone(), task)
             })
             .collect();
-
-        let job_spec = JobSpec { id: job_id, tasks };
+        let job_spec = JobSpec {
+            id: job_id.clone(),
+            tasks,
+        };
 
         let submit_job_res = {
             let mut state = self.state.write().await;
@@ -373,6 +410,8 @@ impl NodeAgent for NodeAgentService {
                 error: e.to_string(),
             }));
         }
+
+        tracing::info!("Job {} submitted.", job_id);
 
         Ok(Response::new(SubmitJobResponse {
             accepted: true,
@@ -404,6 +443,12 @@ impl NodeAgent for NodeAgentService {
             });
 
         state.orchestrator.complete_job(&job_id);
+
+        tracing::info!(
+            "Task result received for task {} from node {}.",
+            task_id,
+            req.node_id
+        );
 
         Ok(Response::new(ReportTaskResultResponse {
             acknowledged: true,

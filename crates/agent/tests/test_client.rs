@@ -363,6 +363,7 @@ async fn report_task_result_updates_state() {
     // Report success
     let resp = service
         .report_task_result(Request::new(ReportTaskResultRequest {
+            node_id: "leader-1".to_string(),
             job_id: "job-1".to_string(),
             task_id: "a".to_string(),
             output: Some(TaskOutput {
@@ -420,6 +421,7 @@ async fn report_task_result_completes_job() {
     // Report success
     service
         .report_task_result(Request::new(ReportTaskResultRequest {
+            node_id: "leader-id".to_string(),
             job_id: "job-1".to_string(),
             task_id: "a".to_string(),
             output: Some(TaskOutput {
@@ -470,6 +472,7 @@ async fn report_failed_task_marks_job_failed() {
 
     service
         .report_task_result(Request::new(ReportTaskResultRequest {
+            node_id: "leader-id".to_string(),
             job_id: "job-1".to_string(),
             task_id: "a".to_string(),
             output: Some(TaskOutput {
