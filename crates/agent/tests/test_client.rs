@@ -266,6 +266,11 @@ async fn submit_job_accepted() {
     let state = test_state("leader-1");
     let service = NodeAgentService::new(state.clone());
 
+    {
+        let mut s = state.write().await;
+        s.raft.role = raft::Role::Leader;
+    }
+
     let resp = service
         .submit_job(Request::new(SubmitJobRequest {
             job_id: "job-1".to_string(),
@@ -332,6 +337,11 @@ async fn report_task_result_updates_state() {
     let state = test_state("leader-1");
     let service = NodeAgentService::new(state.clone());
 
+    {
+        let mut s = state.write().await;
+        s.raft.role = raft::Role::Leader;
+    }
+
     // Submit a job first
     service
         .submit_job(Request::new(SubmitJobRequest {
@@ -393,6 +403,11 @@ async fn report_task_result_completes_job() {
     let state = test_state("leader-1");
     let service = NodeAgentService::new(state.clone());
 
+    {
+        let mut s = state.write().await;
+        s.raft.role = raft::Role::Leader;
+    }
+
     // Submit single-task job
     service
         .submit_job(Request::new(SubmitJobRequest {
@@ -446,6 +461,11 @@ async fn report_task_result_completes_job() {
 async fn report_failed_task_marks_job_failed() {
     let state = test_state("leader-1");
     let service = NodeAgentService::new(state.clone());
+
+    {
+        let mut s = state.write().await;
+        s.raft.role = raft::Role::Leader;
+    }
 
     service
         .submit_job(Request::new(SubmitJobRequest {
