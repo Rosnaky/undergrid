@@ -175,6 +175,14 @@ pub async fn handle_orchestrator_tick(state: &Arc<RwLock<NodeState>>, pool: &Cli
             return;
         }
 
+        let job_count = s.orchestrator.jobs.len();
+        tracing::info!(
+            "Orchestrator tick: {} jobs, {} peer resources, last_snapshot: {}",
+            job_count,
+            s.peer_resources.len(),
+            s.last_snapshot.is_some()
+        );
+
         let nodes: Vec<NodeResources> = {
             let mut resources = Vec::new();
 
@@ -210,8 +218,8 @@ pub async fn handle_orchestrator_tick(state: &Arc<RwLock<NodeState>>, pool: &Cli
             let mut s = state.write().await;
             for job_id in &job_ids {
                 let dispatches = s.orchestrator.schedule_ready_tasks(job_id, &nodes);
-                for (spec, node_id) in dispatches {
-                    all_dispatches.push((job_id.clone(), spec, node_id));
+                for (spec, node_id) in &dispatches {
+                    all_dispatches.push((job_id.clone(), spec.clone(), node_id.clone()));
                 }
             }
         }
@@ -220,12 +228,28 @@ pub async fn handle_orchestrator_tick(state: &Arc<RwLock<NodeState>>, pool: &Cli
     };
 
     for (job_id, spec, node_id) in to_dispatch {
+        tracing::info!(
+            job_id = %job_id,
+            task_id = %spec.id,
+            target_node = %node_id,
+            "Dispatching task"
+        );
+
         let addr = {
             let s = state.read().await;
-            s.raft.get_peer_addr(&node_id)
+            if s.raft.node_id == node_id {
+                Some(format!("http://{}:{}", s.bind_address, s.port))
+            } else {
+                s.raft.get_peer_addr(&node_id)
+            }
         };
         if let Some(addr) = addr {
-            let _ = dispatch_task(pool, &addr, job_id, spec).await;
+            match dispatch_task(pool, &addr, job_id, spec).await {
+                Ok(_) => tracing::info!("Task dispatched successfully"),
+                Err(e) => tracing::error!("Dispath failed: {}", e),
+            }
+        } else {
+            tracing::error!("No address for node {}", node_id);
         }
     }
 }
