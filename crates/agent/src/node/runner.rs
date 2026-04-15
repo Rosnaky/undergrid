@@ -176,7 +176,7 @@ pub async fn handle_orchestrator_tick(state: &Arc<RwLock<NodeState>>, pool: &Cli
         }
 
         let job_count = s.orchestrator.jobs.len();
-        tracing::info!(
+        tracing::debug!(
             "Orchestrator tick: {} jobs, {} peer resources, last_snapshot: {}",
             job_count,
             s.peer_resources.len(),
