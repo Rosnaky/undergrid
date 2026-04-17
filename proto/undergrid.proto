@@ -177,11 +177,12 @@ message DispatchTaskResponse {
 // Task Result
 
 message ReportTaskResultRequest {
-    string job_id = 1;
-    string task_id = 2;
-    TaskOutput output = 3;
-    bool executed = 4;
-    string error = 5;
+    string node_id = 1;
+    string job_id = 2;
+    string task_id = 3;
+    TaskOutput output = 4;
+    bool executed = 5;
+    string error = 6;
 }
 
 message ReportTaskResultResponse {

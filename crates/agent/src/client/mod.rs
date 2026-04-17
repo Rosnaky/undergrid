@@ -211,9 +211,11 @@ pub async fn dispatch_task(
     Ok(response.into_inner())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn report_task_result(
     pool: &ClientPool,
     addr: &str,
+    node_id: String,
     job_id: JobId,
     task_id: TaskId,
     output: TaskOutput,
@@ -225,6 +227,7 @@ pub async fn report_task_result(
     let mesh_output = mesh::undergrid::TaskOutput::from(output);
 
     let request = ReportTaskResultRequest {
+        node_id,
         job_id,
         task_id,
         output: Some(mesh_output),

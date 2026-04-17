@@ -19,7 +19,7 @@ raft = { version = "0.1.0", path = "../raft" }
 runtime = { version = "0.1.0", path = "../runtime" }
 scheduler = { version = "0.1.0", path = "../scheduler" }
 serde = { version = "1.0.228", features = ["derive"] }
-tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros", "time", "signal"] }
+tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros", "time", "signal", "fs"] }
 toml = "1.1.0"
 tonic = "0.14.5"
 tracing = "0.1.44"
