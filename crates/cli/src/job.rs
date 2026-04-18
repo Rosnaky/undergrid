@@ -18,6 +18,7 @@ pub struct JobMeta {
 #[derive(Deserialize)]
 pub struct TaskDef {
     pub image: String,
+    #[serde(default)]
     pub command: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,

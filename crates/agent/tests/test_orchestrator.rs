@@ -61,6 +61,7 @@ fn make_nodes(count: usize) -> Vec<NodeResources> {
 fn make_output(exit_code: i32) -> TaskOutput {
     TaskOutput {
         stdout: vec![],
+        stderr: vec![],
         exit_code,
     }
 }

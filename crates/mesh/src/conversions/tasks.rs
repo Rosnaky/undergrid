@@ -147,6 +147,7 @@ impl From<ProtoTaskOutput> for RuntimeTaskOutput {
     fn from(proto: ProtoTaskOutput) -> Self {
         RuntimeTaskOutput {
             stdout: proto.stdout,
+            stderr: proto.stderr,
             exit_code: proto.exit_code,
         }
     }
@@ -156,6 +157,7 @@ impl From<RuntimeTaskOutput> for ProtoTaskOutput {
     fn from(output: RuntimeTaskOutput) -> Self {
         ProtoTaskOutput {
             stdout: output.stdout,
+            stderr: output.stderr,
             exit_code: output.exit_code,
         }
     }

@@ -148,6 +148,7 @@ fn ready_tasks_unblocks_after_completion() {
         .unwrap()
         .complete_task(TaskOutput {
             stdout: vec![],
+            stderr: vec![],
             exit_code: 0,
         })
         .ok(); // will error since not Running, so set state manually:
@@ -155,6 +156,7 @@ fn ready_tasks_unblocks_after_completion() {
     job.spec.tasks.get_mut("a").unwrap().state = TaskState::Completed {
         output: TaskOutput {
             stdout: vec![],
+            stderr: vec![],
             exit_code: 0,
         },
         duration: Duration::from_secs(1),
@@ -195,6 +197,7 @@ fn ready_tasks_partial_deps_completed() {
         job.spec.tasks.get_mut(*id).unwrap().state = TaskState::Completed {
             output: TaskOutput {
                 stdout: vec![],
+                stderr: vec![],
                 exit_code: 0,
             },
             duration: Duration::from_secs(1),

@@ -66,7 +66,8 @@ message TaskSpec {
 
 message TaskOutput {
     bytes stdout = 1;
-    int32 exit_code = 2;
+    bytes stderr = 2;
+    int32 exit_code = 3;
 }
 
 // Ping

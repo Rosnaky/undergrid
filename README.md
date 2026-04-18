@@ -46,6 +46,27 @@ disk_bytes = 1000000
 depends_on = ["greet"]
 timeout_s = 30
 ```
+or host a service
+```
+[job]
+id = "pineventory"
+
+[tasks.start_pineventory]
+image = "rosnaky/pineventory:latest"
+command = []
+cpu_cores = 1
+memory_bytes = 0
+disk_bytes = 0
+depends_on = []
+timeout_s = 30
+
+[tasks.start_pineventory.env]
+DISCORD_TOKEN=""
+DB_URL=""
+GOOGLE_SHEETS_FOLDER_ID=""
+GOOGLE_TOKEN_PATH=""
+GOOGLE_CREDS_PATH=""
+```
 
 Submit the job using the CLI. You can send it to any node on the network, it doesn't have to be the leader.
 ```

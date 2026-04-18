@@ -1,6 +1,9 @@
 pub mod executor_error;
 
-use std::process::Stdio;
+use std::{
+    process::Stdio,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use tokio::process::Command;
 
@@ -23,13 +26,16 @@ impl Executor {
     }
 
     pub async fn execute(&self, spec: &TaskSpec) -> Result<TaskOutput, ExecutorError> {
-        // Pull image first
         self.pull_image(&spec.image).await?;
 
-        let container_name = format!("undergrid-{}", spec.id);
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_micros();
+
+        let container_name = format!("undergrid-{}-{}", spec.id, timestamp);
         let mut cmd = Command::new("docker");
         cmd.arg("run")
-            .arg("--rm")
             .arg("--cpus")
             .arg(spec.resources.cpu_cores.to_string())
             .arg("--memory")
@@ -37,8 +43,14 @@ impl Executor {
             .arg("--name")
             .arg(&container_name);
 
-        for (k, v) in &spec.env {
-            cmd.arg("-e").arg(format!("{}={}", k, v));
+        // Mode-specific flags
+        match &spec.kind {
+            TaskKind::Batch { .. } => {
+                cmd.arg("--rm");
+            }
+            TaskKind::Service { .. } => {
+                cmd.arg("-d");
+            }
         }
 
         if let TaskKind::Service { port, .. } = &spec.kind {
@@ -50,6 +62,7 @@ impl Executor {
             }
         }
 
+        // Image and command
         cmd.arg(&spec.image);
         for c in &spec.command {
             cmd.arg(c);
@@ -57,16 +70,15 @@ impl Executor {
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        // Timeout
         match &spec.kind {
             TaskKind::Batch { timeout_s: timeout } => {
                 match tokio::time::timeout(*timeout, cmd.output()).await {
                     Ok(result) => {
                         let output =
                             result.map_err(|e| ExecutorError::ExecutionFailed(e.to_string()))?;
-
                         Ok(TaskOutput {
                             stdout: output.stdout,
+                            stderr: output.stderr,
                             exit_code: output.status.code().unwrap_or(-1),
                         })
                     }
@@ -81,10 +93,22 @@ impl Executor {
                 }
             }
             TaskKind::Service { .. } => {
-                // TODO: Implement detached
-                Err(ExecutorError::ExecutionFailed(
-                    "Services not yet implemented".to_string(),
-                ))
+                let output = cmd
+                    .output()
+                    .await
+                    .map_err(|e| ExecutorError::ExecutionFailed(e.to_string()))?;
+
+                if !output.status.success() {
+                    return Err(ExecutorError::ExecutionFailed(
+                        String::from_utf8_lossy(&output.stderr).to_string(),
+                    ));
+                }
+
+                Ok(TaskOutput {
+                    stdout: container_name.into_bytes(),
+                    stderr: vec![],
+                    exit_code: 0,
+                })
             }
         }
     }

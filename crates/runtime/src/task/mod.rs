@@ -31,6 +31,7 @@ pub enum Protocol {
 #[derive(Default, Clone)]
 pub struct TaskOutput {
     pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
     pub exit_code: i32,
 }
 
