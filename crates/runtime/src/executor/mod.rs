@@ -62,6 +62,11 @@ impl Executor {
             }
         }
 
+        for (key, value) in &spec.env {
+            cmd.arg("--env");
+            cmd.arg(format!("{}={}", key, value));
+        }
+
         // Image and command
         cmd.arg(&spec.image);
         for c in &spec.command {
