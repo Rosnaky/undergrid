@@ -378,6 +378,7 @@ async fn report_task_result_updates_state() {
             task_id: "a".to_string(),
             output: Some(TaskOutput {
                 stdout: b"done".to_vec(),
+                stderr: vec![],
                 exit_code: 0,
             }),
             executed: true,
@@ -441,6 +442,7 @@ async fn report_task_result_completes_job() {
             task_id: "a".to_string(),
             output: Some(TaskOutput {
                 stdout: vec![],
+                stderr: vec![],
                 exit_code: 0,
             }),
             executed: true,
@@ -497,6 +499,7 @@ async fn report_failed_task_marks_job_failed() {
             task_id: "a".to_string(),
             output: Some(TaskOutput {
                 stdout: vec![],
+                stderr: vec![],
                 exit_code: 1,
             }),
             executed: true,

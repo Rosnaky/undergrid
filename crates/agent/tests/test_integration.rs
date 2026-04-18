@@ -3,6 +3,7 @@ use agent::orchestrator::Orchestrator;
 use agent::system::{CpuInfo, DiskInfo, MemoryInfo, SystemSnapshot};
 use mesh::undergrid::{Batch, TaskSpec, task_spec};
 use raft::Peer;
+use scheduler::NodeResources;
 use scheduler::drf::DrfScheduler;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -60,9 +61,92 @@ fn make_proto_task(id: &str, deps: Vec<&str>) -> TaskSpec {
     }
 }
 
+// Job tests
+fn make_proto_service_task(id: &str, deps: Vec<&str>) -> TaskSpec {
+    use mesh::undergrid::{PortMapping as ProtoPortMapping, RestartConfig, Service};
+
+    TaskSpec {
+        id: id.to_string(),
+        image: "nginx:latest".to_string(),
+        command: vec![],
+        env: HashMap::new(),
+        cpu_cores: 1.0,
+        memory_bytes: 512,
+        disk_bytes: 1000,
+        gpu: false,
+        depends_on: deps.into_iter().map(String::from).collect(),
+        kind: Some(task_spec::Kind::Service(Service {
+            health_check: "/health".to_string(),
+            restart_config: Some(RestartConfig {
+                policy: 0, // ALWAYS
+                max_retries: 0,
+                retry_delay_s: 0,
+            }),
+            ports: vec![ProtoPortMapping {
+                container_port: 80,
+                protocol: "tcp".to_string(),
+            }],
+        })),
+    }
+}
+
+fn submit_tasks_to_orchestrator(state: &mut NodeState, job_id: &str, proto_tasks: Vec<TaskSpec>) {
+    let task_specs: Vec<runtime::task::TaskSpec> = proto_tasks
+        .into_iter()
+        .map(|t| runtime::task::TaskSpec::try_from(t).unwrap())
+        .collect();
+    let task_map: HashMap<String, runtime::task::Task> = task_specs
+        .into_iter()
+        .map(|spec| {
+            let task = runtime::task::Task::new(spec);
+            (task.spec.id.clone(), task)
+        })
+        .collect();
+    state
+        .orchestrator
+        .submit_job(runtime::job::JobSpec {
+            id: job_id.to_string(),
+            tasks: task_map,
+        })
+        .unwrap();
+}
+
+async fn find_leader_state(n1: &TestNode, n2: &TestNode, n3: &TestNode) -> Arc<RwLock<NodeState>> {
+    if matches!(get_role(&n1.state).await, raft::Role::Leader) {
+        n1.state.clone()
+    } else if matches!(get_role(&n2.state).await, raft::Role::Leader) {
+        n2.state.clone()
+    } else {
+        n3.state.clone()
+    }
+}
+
+fn gather_test_resources(s: &NodeState) -> Vec<NodeResources> {
+    let mut resources = Vec::new();
+    if let Some(ref snapshot) = s.last_snapshot {
+        resources.push(NodeResources {
+            node_id: s.raft.node_id.clone(),
+            available_cpu: snapshot.cpu.cpu_cores as f64,
+            available_memory_bytes: snapshot.memory.memory_available_bytes,
+            available_disk_bytes: snapshot.disk.disk_available_bytes,
+            available_gpu: 0,
+        });
+    }
+    for (node_id, snapshot) in &s.peer_resources {
+        resources.push(NodeResources {
+            node_id: node_id.clone(),
+            available_cpu: snapshot.cpu.cpu_cores as f64,
+            available_memory_bytes: snapshot.memory.memory_available_bytes,
+            available_disk_bytes: snapshot.disk.disk_available_bytes,
+            available_gpu: 0,
+        });
+    }
+    resources
+}
+
 async fn set_fake_resources(state: &Arc<RwLock<NodeState>>) {
     let mut s = state.write().await;
-    s.last_snapshot = Some(SystemSnapshot {
+    let snapshot = SystemSnapshot {
         cpu: CpuInfo {
             cpu_cores: 4,
             cpu_usage_pct: 10.0,
@@ -78,7 +162,13 @@ async fn set_fake_resources(state: &Arc<RwLock<NodeState>>) {
         },
         gpu: None,
         hostname: "0.0.0.0".to_string(),
-    });
+    };
+    s.last_snapshot = Some(snapshot.clone());
+
+    let peer_ids: Vec<String> = s.raft.peers.iter().map(|p| p.node_id.clone()).collect();
+    for peer_id in peer_ids {
+        s.peer_resources.insert(peer_id, snapshot.clone());
+    }
 }
 
 // ── Test Node ────────────────────────────────────────────
@@ -1432,6 +1522,666 @@ async fn orchestrator_tick_skipped_on_follower() {
         matches!(job.spec.tasks["a"].state, runtime::task::TaskState::Pending),
         "Follower should not schedule tasks"
     );
+
+    shutdown_node(n1);
+    shutdown_node(n2);
+    shutdown_node(n3);
+}
+
+// ═══════════════════════════════════════════════════════════
+// BATCH JOB TESTS
+// ═══════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn batch_job_schedules_independent_tasks_in_parallel() {
+    let (n1, n2, n3, pool) = start_3_node_cluster().await;
+    set_fake_resources(&n1.state).await;
+    set_fake_resources(&n2.state).await;
+    set_fake_resources(&n3.state).await;
+
+    run_raft_ticks(
+        &[&n1.state, &n2.state, &n3.state],
+        &pool,
+        Duration::from_secs(2),
+    )
+    .await;
+
+    let leader_state = find_leader_state(&n1, &n2, &n3).await;
+
+    let nodes = {
+        let s = leader_state.read().await;
+        gather_test_resources(&s)
+    };
+
+    {
+        let mut s = leader_state.write().await;
+        submit_tasks_to_orchestrator(
+            &mut s,
+            "batch-parallel",
+            vec![
+                make_proto_task("t1", vec![]),
+                make_proto_task("t2", vec![]),
+                make_proto_task("t3", vec![]),
+            ],
+        );
+
+        let dispatches = s
+            .orchestrator
+            .schedule_ready_tasks("batch-parallel", &nodes);
+        assert_eq!(
+            dispatches.len(),
+            3,
+            "All 3 independent tasks should be scheduled"
+        );
+
+        let job = &s.orchestrator.jobs["batch-parallel"];
+        for id in ["t1", "t2", "t3"] {
+            assert!(
+                matches!(
+                    job.spec.tasks[id].state,
+                    runtime::task::TaskState::Running { .. }
+                ),
+                "Task {} should be Running",
+                id
+            );
+        }
+        assert!(matches!(job.state, runtime::job::JobState::Running { .. }));
+    }
+
+    shutdown_node(n1);
+    shutdown_node(n2);
+    shutdown_node(n3);
+}
+
+#[tokio::test]
+async fn batch_job_respects_dag_ordering() {
+    let (n1, n2, n3, pool) = start_3_node_cluster().await;
+    set_fake_resources(&n1.state).await;
+    set_fake_resources(&n2.state).await;
+    set_fake_resources(&n3.state).await;
+
+    run_raft_ticks(
+        &[&n1.state, &n2.state, &n3.state],
+        &pool,
+        Duration::from_secs(2),
+    )
+    .await;
+
+    let leader_state = if matches!(get_role(&n1.state).await, raft::Role::Leader) {
+        n1.state.clone()
+    } else if matches!(get_role(&n2.state).await, raft::Role::Leader) {
+        n2.state.clone()
+    } else {
+        n3.state.clone()
+    };
+
+    // a -> b -> c (linear chain)
+    {
+        let mut s = leader_state.write().await;
+        submit_tasks_to_orchestrator(
+            &mut s,
+            "batch-chain",
+            vec![
+                make_proto_task("a", vec![]),
+                make_proto_task("b", vec!["a"]),
+                make_proto_task("c", vec!["b"]),
+            ],
+        );
+    }
+
+    agent::node::runner::handle_orchestrator_tick(&leader_state, &pool).await;
+
+    {
+        let s = leader_state.read().await;
+        let job = &s.orchestrator.jobs["batch-chain"];
+        assert!(matches!(
+            job.spec.tasks["a"].state,
+            runtime::task::TaskState::Running { .. }
+        ));
+        assert!(matches!(
+            job.spec.tasks["b"].state,
+            runtime::task::TaskState::Pending
+        ));
+        assert!(matches!(
+            job.spec.tasks["c"].state,
+            runtime::task::TaskState::Pending
+        ));
+    }
+
+    // Simulate task a completing
+    {
+        let mut s = leader_state.write().await;
+        s.orchestrator
+            .handle_task_result(
+                &"batch-chain".to_string(),
+                &"a".to_string(),
+                true,
+                runtime::task::TaskOutput {
+                    stdout: vec![],
+                    stderr: vec![],
+                    exit_code: 0,
+                },
+            )
+            .unwrap();
+    }
+
+    agent::node::runner::handle_orchestrator_tick(&leader_state, &pool).await;
+
+    {
+        let s = leader_state.read().await;
+        let job = &s.orchestrator.jobs["batch-chain"];
+        assert!(matches!(
+            job.spec.tasks["a"].state,
+            runtime::task::TaskState::Completed { .. }
+        ));
+        assert!(matches!(
+            job.spec.tasks["b"].state,
+            runtime::task::TaskState::Running { .. }
+        ));
+        assert!(matches!(
+            job.spec.tasks["c"].state,
+            runtime::task::TaskState::Pending
+        ));
+    }
+
+    shutdown_node(n1);
+    shutdown_node(n2);
+    shutdown_node(n3);
+}
+
+#[tokio::test]
+async fn batch_job_diamond_dag() {
+    let (n1, n2, n3, pool) = start_3_node_cluster().await;
+    set_fake_resources(&n1.state).await;
+    set_fake_resources(&n2.state).await;
+    set_fake_resources(&n3.state).await;
+
+    run_raft_ticks(
+        &[&n1.state, &n2.state, &n3.state],
+        &pool,
+        Duration::from_secs(2),
+    )
+    .await;
+
+    let leader_state = find_leader_state(&n1, &n2, &n3).await;
+
+    let nodes = {
+        let s = leader_state.read().await;
+        gather_test_resources(&s)
+    };
+
+    //   a
+    //  / \
+    // b   c
+    //  \ /
+    //   d
+    {
+        let mut s = leader_state.write().await;
+        submit_tasks_to_orchestrator(
+            &mut s,
+            "diamond",
+            vec![
+                make_proto_task("a", vec![]),
+                make_proto_task("b", vec!["a"]),
+                make_proto_task("c", vec!["a"]),
+                make_proto_task("d", vec!["b", "c"]),
+            ],
+        );
+    }
+
+    // Wave 1: only a
+    {
+        let mut s = leader_state.write().await;
+        let dispatches = s.orchestrator.schedule_ready_tasks("diamond", &nodes);
+        assert_eq!(dispatches.len(), 1);
+        assert_eq!(dispatches[0].0.id, "a");
+
+        let job = &s.orchestrator.jobs["diamond"];
+        assert!(matches!(
+            job.spec.tasks["a"].state,
+            runtime::task::TaskState::Running { .. }
+        ));
+        assert!(matches!(
+            job.spec.tasks["b"].state,
+            runtime::task::TaskState::Pending
+        ));
+        assert!(matches!(
+            job.spec.tasks["c"].state,
+            runtime::task::TaskState::Pending
+        ));
+        assert!(matches!(
+            job.spec.tasks["d"].state,
+            runtime::task::TaskState::Pending
+        ));
+    }
+
+    // Complete a -> wave 2: b and c
+    {
+        let mut s = leader_state.write().await;
+        s.orchestrator
+            .handle_task_result(
+                &"diamond".to_string(),
+                &"a".to_string(),
+                true,
+                runtime::task::TaskOutput {
+                    stdout: vec![],
+                    stderr: vec![],
+                    exit_code: 0,
+                },
+            )
+            .unwrap();
+
+        let dispatches = s.orchestrator.schedule_ready_tasks("diamond", &nodes);
+        assert_eq!(dispatches.len(), 2, "b and c should both be dispatched");
+
+        let job = &s.orchestrator.jobs["diamond"];
+        assert!(matches!(
+            job.spec.tasks["b"].state,
+            runtime::task::TaskState::Running { .. }
+        ));
+        assert!(matches!(
+            job.spec.tasks["c"].state,
+            runtime::task::TaskState::Running { .. }
+        ));
+        assert!(matches!(
+            job.spec.tasks["d"].state,
+            runtime::task::TaskState::Pending
+        ));
+    }
+
+    // Complete b only -> d still blocked on c
+    {
+        let mut s = leader_state.write().await;
+        s.orchestrator
+            .handle_task_result(
+                &"diamond".to_string(),
+                &"b".to_string(),
+                true,
+                runtime::task::TaskOutput {
+                    stdout: vec![],
+                    stderr: vec![],
+                    exit_code: 0,
+                },
+            )
+            .unwrap();
+
+        let dispatches = s.orchestrator.schedule_ready_tasks("diamond", &nodes);
+        assert_eq!(dispatches.len(), 0, "d should not be ready yet");
+
+        let job = &s.orchestrator.jobs["diamond"];
+        assert!(
+            matches!(job.spec.tasks["d"].state, runtime::task::TaskState::Pending),
+            "d should still be Pending — c hasn't completed"
+        );
+    }
+
+    // Complete c -> d becomes ready
+    {
+        let mut s = leader_state.write().await;
+        s.orchestrator
+            .handle_task_result(
+                &"diamond".to_string(),
+                &"c".to_string(),
+                true,
+                runtime::task::TaskOutput {
+                    stdout: vec![],
+                    stderr: vec![],
+                    exit_code: 0,
+                },
+            )
+            .unwrap();
+
+        let dispatches = s.orchestrator.schedule_ready_tasks("diamond", &nodes);
+        assert_eq!(dispatches.len(), 1);
+        assert_eq!(dispatches[0].0.id, "d");
+
+        let job = &s.orchestrator.jobs["diamond"];
+        assert!(matches!(
+            job.spec.tasks["d"].state,
+            runtime::task::TaskState::Running { .. }
+        ));
+    }
+
+    shutdown_node(n1);
+    shutdown_node(n2);
+    shutdown_node(n3);
+}
+
+#[tokio::test]
+async fn batch_task_failure_does_not_block_independent_tasks() {
+    let (n1, n2, n3, pool) = start_3_node_cluster().await;
+    set_fake_resources(&n1.state).await;
+    set_fake_resources(&n2.state).await;
+    set_fake_resources(&n3.state).await;
+
+    run_raft_ticks(
+        &[&n1.state, &n2.state, &n3.state],
+        &pool,
+        Duration::from_secs(2),
+    )
+    .await;
+
+    let leader_state = find_leader_state(&n1, &n2, &n3).await;
+
+    let nodes = {
+        let s = leader_state.read().await;
+        gather_test_resources(&s)
+    };
+
+    // a and b are independent roots, c depends on a, d depends on b
+    {
+        let mut s = leader_state.write().await;
+        submit_tasks_to_orchestrator(
+            &mut s,
+            "partial-fail",
+            vec![
+                make_proto_task("a", vec![]),
+                make_proto_task("b", vec![]),
+                make_proto_task("c", vec!["a"]),
+                make_proto_task("d", vec!["b"]),
+            ],
+        );
+
+        let dispatches = s.orchestrator.schedule_ready_tasks("partial-fail", &nodes);
+        assert_eq!(dispatches.len(), 2, "a and b should both be scheduled");
+    }
+
+    // Fail task a, complete task b
+    {
+        let mut s = leader_state.write().await;
+        s.orchestrator
+            .handle_task_result(
+                &"partial-fail".to_string(),
+                &"a".to_string(),
+                false,
+                runtime::task::TaskOutput {
+                    stdout: vec![],
+                    stderr: b"crash".to_vec(),
+                    exit_code: 1,
+                },
+            )
+            .unwrap();
+        s.orchestrator
+            .handle_task_result(
+                &"partial-fail".to_string(),
+                &"b".to_string(),
+                true,
+                runtime::task::TaskOutput {
+                    stdout: vec![],
+                    stderr: vec![],
+                    exit_code: 0,
+                },
+            )
+            .unwrap();
+
+        let dispatches = s.orchestrator.schedule_ready_tasks("partial-fail", &nodes);
+        assert_eq!(dispatches.len(), 1, "Only d should be dispatched");
+        assert_eq!(dispatches[0].0.id, "d");
+
+        let job = &s.orchestrator.jobs["partial-fail"];
+        assert!(matches!(
+            job.spec.tasks["a"].state,
+            runtime::task::TaskState::Failed { .. }
+        ));
+        assert!(
+            matches!(job.spec.tasks["c"].state, runtime::task::TaskState::Pending),
+            "c should stay Pending — its dependency a failed"
+        );
+        assert!(
+            matches!(
+                job.spec.tasks["d"].state,
+                runtime::task::TaskState::Running { .. }
+            ),
+            "d should be Running — its dependency b succeeded"
+        );
+    }
+
+    shutdown_node(n1);
+    shutdown_node(n2);
+    shutdown_node(n3);
+}
+
+// ═══════════════════════════════════════════════════════════
+// SERVICE JOB TESTS
+// ═══════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn service_task_parses_and_schedules() {
+    let (n1, n2, n3, pool) = start_3_node_cluster().await;
+    set_fake_resources(&n1.state).await;
+    set_fake_resources(&n2.state).await;
+    set_fake_resources(&n3.state).await;
+
+    run_raft_ticks(
+        &[&n1.state, &n2.state, &n3.state],
+        &pool,
+        Duration::from_secs(2),
+    )
+    .await;
+
+    let leader_state = if matches!(get_role(&n1.state).await, raft::Role::Leader) {
+        n1.state.clone()
+    } else if matches!(get_role(&n2.state).await, raft::Role::Leader) {
+        n2.state.clone()
+    } else {
+        n3.state.clone()
+    };
+
+    {
+        let mut s = leader_state.write().await;
+        submit_tasks_to_orchestrator(
+            &mut s,
+            "svc-job",
+            vec![make_proto_service_task("web", vec![])],
+        );
+    }
+
+    agent::node::runner::handle_orchestrator_tick(&leader_state, &pool).await;
+
+    {
+        let s = leader_state.read().await;
+        let job = &s.orchestrator.jobs["svc-job"];
+        assert!(
+            matches!(
+                job.spec.tasks["web"].state,
+                runtime::task::TaskState::Running { .. }
+            ),
+            "Service task should be scheduled"
+        );
+        assert!(
+            matches!(
+                job.spec.tasks["web"].spec.kind,
+                runtime::task::TaskKind::Service { .. }
+            ),
+            "Task kind should be Service"
+        );
+    }
+
+    shutdown_node(n1);
+    shutdown_node(n2);
+    shutdown_node(n3);
+}
+
+#[tokio::test]
+async fn service_task_with_restart_policy_retries() {
+    use mesh::undergrid::{RestartConfig, Service};
+
+    let proto_task = TaskSpec {
+        id: "worker".to_string(),
+        image: "worker:latest".to_string(),
+        command: vec![],
+        env: HashMap::new(),
+        cpu_cores: 2.0,
+        memory_bytes: 1024,
+        disk_bytes: 0,
+        gpu: false,
+        depends_on: vec![],
+        kind: Some(task_spec::Kind::Service(Service {
+            health_check: String::new(),
+            restart_config: Some(RestartConfig {
+                policy: 1, // RETRIES
+                max_retries: 3,
+                retry_delay_s: 5,
+            }),
+            ports: vec![],
+        })),
+    };
+
+    let spec = runtime::task::TaskSpec::try_from(proto_task).unwrap();
+    match &spec.kind {
+        runtime::task::TaskKind::Service {
+            restart_policy,
+            health_check,
+            ..
+        } => {
+            match restart_policy {
+                runtime::task::RestartPolicy::Retries {
+                    max_retries,
+                    retry_delay_s,
+                } => {
+                    assert_eq!(*max_retries, 3);
+                    assert_eq!(*retry_delay_s, 5);
+                }
+                other => panic!("Expected Retries, got {:?}", other),
+            }
+            assert!(
+                health_check.is_none(),
+                "Empty health_check should map to None"
+            );
+        }
+        other => panic!("Expected Service, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn mixed_batch_and_service_job() {
+    let (n1, n2, n3, pool) = start_3_node_cluster().await;
+    set_fake_resources(&n1.state).await;
+    set_fake_resources(&n2.state).await;
+    set_fake_resources(&n3.state).await;
+
+    run_raft_ticks(
+        &[&n1.state, &n2.state, &n3.state],
+        &pool,
+        Duration::from_secs(2),
+    )
+    .await;
+
+    let leader_state = if matches!(get_role(&n1.state).await, raft::Role::Leader) {
+        n1.state.clone()
+    } else if matches!(get_role(&n2.state).await, raft::Role::Leader) {
+        n2.state.clone()
+    } else {
+        n3.state.clone()
+    };
+
+    // Batch task "migrate" runs first, then service "api" depends on it
+    {
+        let mut s = leader_state.write().await;
+        submit_tasks_to_orchestrator(
+            &mut s,
+            "mixed-job",
+            vec![
+                make_proto_task("migrate", vec![]),
+                make_proto_service_task("api", vec!["migrate"]),
+            ],
+        );
+    }
+
+    // Wave 1: only migrate
+    agent::node::runner::handle_orchestrator_tick(&leader_state, &pool).await;
+    {
+        let s = leader_state.read().await;
+        let job = &s.orchestrator.jobs["mixed-job"];
+        assert!(matches!(
+            job.spec.tasks["migrate"].state,
+            runtime::task::TaskState::Running { .. }
+        ));
+        assert!(matches!(
+            job.spec.tasks["api"].state,
+            runtime::task::TaskState::Pending
+        ));
+    }
+
+    // Complete migrate -> api becomes ready
+    {
+        let mut s = leader_state.write().await;
+        s.orchestrator
+            .handle_task_result(
+                &"mixed-job".to_string(),
+                &"migrate".to_string(),
+                true,
+                runtime::task::TaskOutput {
+                    stdout: vec![],
+                    stderr: vec![],
+                    exit_code: 0,
+                },
+            )
+            .unwrap();
+    }
+    agent::node::runner::handle_orchestrator_tick(&leader_state, &pool).await;
+    {
+        let s = leader_state.read().await;
+        let job = &s.orchestrator.jobs["mixed-job"];
+        assert!(
+            matches!(
+                job.spec.tasks["api"].state,
+                runtime::task::TaskState::Running { .. }
+            ),
+            "Service task should run after batch dependency completes"
+        );
+    }
+
+    shutdown_node(n1);
+    shutdown_node(n2);
+    shutdown_node(n3);
+}
+
+#[tokio::test]
+async fn multiple_jobs_scheduled_independently() {
+    let (n1, n2, n3, pool) = start_3_node_cluster().await;
+    set_fake_resources(&n1.state).await;
+    set_fake_resources(&n2.state).await;
+    set_fake_resources(&n3.state).await;
+
+    run_raft_ticks(
+        &[&n1.state, &n2.state, &n3.state],
+        &pool,
+        Duration::from_secs(2),
+    )
+    .await;
+
+    let leader_state = if matches!(get_role(&n1.state).await, raft::Role::Leader) {
+        n1.state.clone()
+    } else if matches!(get_role(&n2.state).await, raft::Role::Leader) {
+        n2.state.clone()
+    } else {
+        n3.state.clone()
+    };
+
+    {
+        let mut s = leader_state.write().await;
+        submit_tasks_to_orchestrator(&mut s, "job-a", vec![make_proto_task("t1", vec![])]);
+        submit_tasks_to_orchestrator(
+            &mut s,
+            "job-b",
+            vec![make_proto_service_task("svc1", vec![])],
+        );
+    }
+
+    agent::node::runner::handle_orchestrator_tick(&leader_state, &pool).await;
+
+    {
+        let s = leader_state.read().await;
+        assert!(matches!(
+            s.orchestrator.jobs["job-a"].spec.tasks["t1"].state,
+            runtime::task::TaskState::Running { .. }
+        ));
+        assert!(matches!(
+            s.orchestrator.jobs["job-b"].spec.tasks["svc1"].state,
+            runtime::task::TaskState::Running { .. }
+        ));
+    }
 
     shutdown_node(n1);
     shutdown_node(n2);

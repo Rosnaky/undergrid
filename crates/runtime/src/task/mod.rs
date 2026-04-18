@@ -9,7 +9,7 @@ pub mod task_error;
 pub type TaskId = String;
 pub type HealthCheck = String;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum TaskKind {
     /// Run to completion
     Batch { timeout_s: Duration },
@@ -22,7 +22,7 @@ pub enum TaskKind {
     },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Protocol {
     UDP,
     TCP,
@@ -31,10 +31,11 @@ pub enum Protocol {
 #[derive(Default, Clone)]
 pub struct TaskOutput {
     pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
     pub exit_code: i32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum RestartPolicy {
     Always,
     Retries {
@@ -45,7 +46,7 @@ pub enum RestartPolicy {
     None,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PortMapping {
     pub container_port: u16,
     pub protocol: Protocol,

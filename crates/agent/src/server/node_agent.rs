@@ -433,6 +433,15 @@ impl NodeAgent for NodeAgentService {
         let task_output = TaskOutput::from(proto_output);
         let success = task_output.exit_code == 0;
 
+        tracing::debug!(
+            "Task data for task {} from node {} exited with code {}, stdout={}, stderr={}",
+            task_id,
+            req.node_id,
+            &task_output.exit_code,
+            String::from_utf8_lossy(&task_output.stdout),
+            String::from_utf8_lossy(&task_output.stderr),
+        );
+
         // Update task state and result
         let mut state = self.state.write().await;
         let _ = state
@@ -445,6 +454,7 @@ impl NodeAgent for NodeAgentService {
         state.orchestrator.complete_job(&job_id);
 
         tracing::info!(
+            success = success,
             "Task result received for task {} from node {}.",
             task_id,
             req.node_id
