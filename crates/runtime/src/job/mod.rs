@@ -11,6 +11,7 @@ use std::time::Instant;
 
 pub type JobId = String;
 
+#[derive(Clone)]
 pub enum JobState {
     Pending,
     Running { started_at: Instant },

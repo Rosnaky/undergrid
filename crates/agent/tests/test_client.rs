@@ -514,3 +514,177 @@ async fn report_failed_task_marks_job_failed() {
         runtime::job::JobState::Failed { .. }
     ));
 }
+
+#[tokio::test]
+async fn get_job_status_returns_not_found_for_missing_job() {
+    let state = test_state("leader-1");
+    let service = NodeAgentService::new(state.clone());
+
+    {
+        let mut s = state.write().await;
+        s.raft.role = raft::Role::Leader;
+    }
+
+    let resp = service
+        .get_job_status(Request::new(GetJobStatusRequest {
+            job_id: "nonexistent".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(!resp.found);
+}
+
+#[tokio::test]
+async fn get_job_status_returns_pending_after_submit() {
+    let state = test_state("leader-1");
+    let service = NodeAgentService::new(state.clone());
+
+    {
+        let mut s = state.write().await;
+        s.raft.role = raft::Role::Leader;
+    }
+
+    service
+        .submit_job(Request::new(SubmitJobRequest {
+            job_id: "job-1".to_string(),
+            tasks: vec![make_proto_task("a", vec![])],
+        }))
+        .await
+        .unwrap();
+
+    let resp = service
+        .get_job_status(Request::new(GetJobStatusRequest {
+            job_id: "job-1".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(resp.found);
+    assert_eq!(resp.status, JobStatus::Pending as i32);
+}
+
+#[tokio::test]
+async fn get_job_status_returns_running() {
+    let state = test_state("leader-1");
+    let service = NodeAgentService::new(state.clone());
+
+    {
+        let mut s = state.write().await;
+        s.raft.role = raft::Role::Leader;
+    }
+
+    service
+        .submit_job(Request::new(SubmitJobRequest {
+            job_id: "job-1".to_string(),
+            tasks: vec![make_proto_task("a", vec![])],
+        }))
+        .await
+        .unwrap();
+
+    {
+        let mut s = state.write().await;
+        if let Some(job) = s.orchestrator.jobs.get_mut("job-1") {
+            job.state = runtime::job::JobState::Running {
+                started_at: std::time::Instant::now(),
+            };
+        }
+    }
+
+    let resp = service
+        .get_job_status(Request::new(GetJobStatusRequest {
+            job_id: "job-1".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(resp.found);
+    assert_eq!(resp.status, JobStatus::Running as i32);
+    assert!(resp.elapsed_ms < 1000); // just submitted, should be near zero
+}
+
+#[tokio::test]
+async fn get_job_status_returns_completed() {
+    let state = test_state("leader-1");
+    let service = NodeAgentService::new(state.clone());
+
+    {
+        let mut s = state.write().await;
+        s.raft.role = raft::Role::Leader;
+    }
+
+    service
+        .submit_job(Request::new(SubmitJobRequest {
+            job_id: "job-1".to_string(),
+            tasks: vec![make_proto_task("a", vec![])],
+        }))
+        .await
+        .unwrap();
+
+    {
+        let mut s = state.write().await;
+        if let Some(job) = s.orchestrator.jobs.get_mut("job-1") {
+            job.state = runtime::job::JobState::Completed {
+                duration: std::time::Duration::from_secs(5),
+            };
+        }
+    }
+
+    let resp = service
+        .get_job_status(Request::new(GetJobStatusRequest {
+            job_id: "job-1".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(resp.found);
+    assert_eq!(resp.status, JobStatus::Completed as i32);
+    assert_eq!(resp.elapsed_ms, 5000);
+    assert!(resp.error.is_empty());
+}
+
+#[tokio::test]
+async fn get_job_status_returns_failed_with_error() {
+    let state = test_state("leader-1");
+    let service = NodeAgentService::new(state.clone());
+
+    {
+        let mut s = state.write().await;
+        s.raft.role = raft::Role::Leader;
+    }
+
+    service
+        .submit_job(Request::new(SubmitJobRequest {
+            job_id: "job-1".to_string(),
+            tasks: vec![make_proto_task("a", vec![])],
+        }))
+        .await
+        .unwrap();
+
+    {
+        let mut s = state.write().await;
+        if let Some(job) = s.orchestrator.jobs.get_mut("job-1") {
+            job.state = runtime::job::JobState::Failed {
+                error: "out of memory".to_string(),
+                duration: std::time::Duration::from_secs(3),
+            };
+        }
+    }
+
+    let resp = service
+        .get_job_status(Request::new(GetJobStatusRequest {
+            job_id: "job-1".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(resp.found);
+    assert_eq!(resp.status, JobStatus::Failed as i32);
+    assert_eq!(resp.elapsed_ms, 3000);
+    assert_eq!(resp.error, "out of memory");
+}

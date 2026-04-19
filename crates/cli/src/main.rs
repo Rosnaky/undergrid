@@ -1,7 +1,10 @@
 mod job;
 
 use clap::{Parser, Subcommand};
-use mesh::undergrid::{SubmitJobRequest, TaskSpec, node_agent_client::NodeAgentClient};
+use mesh::undergrid::{
+    GetJobStatusRequest, JobStatus as ProtoJobStatus, SubmitJobRequest, TaskSpec,
+    node_agent_client::NodeAgentClient,
+};
 
 #[derive(Subcommand)]
 enum Commands {
@@ -10,17 +13,11 @@ enum Commands {
         /// Path to job TOML file
         file: String,
     },
-    // // Check status of job
-    // Status {
-    //     /// Job ID
-    //     job_id: String,
-    // },
-
-    // /// Ping a node
-    // Ping,
-
-    // /// List cluster peers
-    // Peers,
+    // Check status of job
+    Status {
+        /// Job ID
+        job_id: String,
+    },
 }
 
 #[derive(Parser)]
@@ -70,6 +67,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 eprintln!("Job rejected: {}", response.error);
                 std::process::exit(1);
+            }
+        }
+        Commands::Status { job_id } => {
+            let mut client = NodeAgentClient::connect(cli.node).await?;
+            let response = client
+                .get_job_status(GetJobStatusRequest {
+                    job_id: job_id.clone(),
+                })
+                .await?
+                .into_inner();
+
+            let status =
+                ProtoJobStatus::try_from(response.status).unwrap_or(ProtoJobStatus::Pending);
+
+            if response.found {
+                match status {
+                    ProtoJobStatus::Pending => println!("Job '{}': Pending", job_id),
+                    ProtoJobStatus::Running => {
+                        let secs = response.elapsed_ms / 1000;
+                        println!("Job '{}': Running ({secs}s elapsed)", job_id);
+                    }
+                    ProtoJobStatus::Completed => {
+                        let secs = response.elapsed_ms / 1000;
+                        println!("Job '{}': Completed in {secs}s", job_id);
+                    }
+                    ProtoJobStatus::Failed => {
+                        let secs = response.elapsed_ms / 1000;
+                        println!(
+                            "Job '{}': Failed after {secs}s — {}",
+                            job_id, response.error
+                        );
+                    }
+                }
+            } else {
+                println!("Job '{}' not found", job_id);
             }
         }
     }

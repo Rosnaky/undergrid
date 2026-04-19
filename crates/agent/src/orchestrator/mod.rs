@@ -200,4 +200,8 @@ impl Orchestrator {
             })
         })
     }
+
+    pub fn get_job_status(&self, job_id: &str) -> Option<JobState> {
+        self.jobs.get(job_id).map(|job| job.state.clone())
+    }
 }

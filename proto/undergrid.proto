@@ -70,6 +70,13 @@ message TaskOutput {
     int32 exit_code = 3;
 }
 
+enum JobStatus {
+    PENDING = 0;
+    RUNNING = 1;
+    COMPLETED = 2;
+    FAILED = 3;
+}
+
 // Ping
 
 message PingRequest {
@@ -190,6 +197,19 @@ message ReportTaskResultResponse {
     bool acknowledged = 1;
 }
 
+// Get Job Status
+
+message GetJobStatusRequest {
+    string job_id = 1;
+}
+
+message GetJobStatusResponse {
+    bool found = 1;
+    JobStatus status = 2;
+    uint64 elapsed_ms = 3;
+    string error = 4;
+}
+
 service NodeAgent {
     rpc Ping (PingRequest) returns (PingResponse);
     rpc Register (RegisterRequest) returns (RegisterResponse);
@@ -201,4 +221,5 @@ service NodeAgent {
     rpc SubmitJob (SubmitJobRequest) returns (SubmitJobResponse);
     rpc DispatchTask (DispatchTaskRequest) returns (DispatchTaskResponse);
     rpc ReportTaskResult (ReportTaskResultRequest) returns (ReportTaskResultResponse);
+    rpc GetJobStatus (GetJobStatusRequest) returns (GetJobStatusResponse);
 }

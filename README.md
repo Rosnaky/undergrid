@@ -68,6 +68,16 @@ GOOGLE_TOKEN_PATH=""
 GOOGLE_CREDS_PATH=""
 ```
 
+Use the following CLI command to submit a job
+```
+cargo run -p cli -- --node <NODE_ADDR> submit <path/to/job.toml>
+```
+
+#### Get Job Status
+```
+cargo run -p cli -- --node <NODE_ADDR> status <job_id>
+```
+
 Submit the job using the CLI. You can send it to any node on the network, it doesn't have to be the leader.
 ```
 cargo run -p cli  -- --node http://127.0.0.1:<PORT> submit path/to/test-job.toml 
