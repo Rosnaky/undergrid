@@ -2,10 +2,11 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use mesh::undergrid::{
     AddPeerRequest, AddPeerResponse, AppendEntriesRequest, AppendEntriesResponse,
-    DispatchTaskRequest, DispatchTaskResponse, HeartbeatRequest, HeartbeatResponse, NodeInfo,
-    PingRequest, PingResponse, RegisterRequest, RegisterResponse, RemovePeerRequest,
-    RemovePeerResponse, ReportTaskResultRequest, ReportTaskResultResponse, ResourceSnapshot,
-    SubmitJobRequest, SubmitJobResponse, VoteRequest, VoteResponse, node_agent_server::NodeAgent,
+    DispatchTaskRequest, DispatchTaskResponse, GetJobStatusRequest, GetJobStatusResponse,
+    HeartbeatRequest, HeartbeatResponse, NodeInfo, PingRequest, PingResponse, RegisterRequest,
+    RegisterResponse, RemovePeerRequest, RemovePeerResponse, ReportTaskResultRequest,
+    ReportTaskResultResponse, ResourceSnapshot, SubmitJobRequest, SubmitJobResponse, VoteRequest,
+    VoteResponse, node_agent_server::NodeAgent,
 };
 use raft::{RaftMessage, Role};
 use runtime::{
@@ -17,7 +18,7 @@ use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
 use crate::{
-    client::{add_peer, client_pool::ClientPool, report_task_result, submit_job},
+    client::{add_peer, client_pool::ClientPool, get_job_status, report_task_result, submit_job},
     node::state::NodeState,
     system::SystemSnapshot,
 };
@@ -463,5 +464,43 @@ impl NodeAgent for NodeAgentService {
         Ok(Response::new(ReportTaskResultResponse {
             acknowledged: true,
         }))
+    }
+
+    async fn get_job_status(
+        &self,
+        request: Request<GetJobStatusRequest>,
+    ) -> Result<Response<GetJobStatusResponse>, Status> {
+        let req = request.into_inner();
+
+        let job_id = req.job_id;
+        {
+            let s = self.state.read().await;
+
+            if !matches!(s.raft.role, Role::Leader) {
+                let leader_addr = s
+                    .raft
+                    .peers
+                    .iter()
+                    .find(|p| Some(&p.node_id) == s.raft.leader_id.as_ref())
+                    .map(|p| format!("http://{}:{}", p.ip_address, p.port));
+                drop(s);
+
+                if let Some(addr) = leader_addr {
+                    return match get_job_status(&self.client_pool, &addr, job_id).await {
+                        Ok(resp) => Ok(Response::new(resp)),
+                        Err(e) => Err(Status::internal(e.to_string())),
+                    };
+                } else {
+                    return Err(Status::unavailable("No leader available"));
+                }
+            }
+        }
+
+        let job_status = {
+            let s = self.state.read().await;
+            s.orchestrator.get_job_status(&job_id)
+        };
+
+        Ok(Response::new(job_status.into()))
     }
 }

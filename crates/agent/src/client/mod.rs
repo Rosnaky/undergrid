@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use mesh::undergrid::{
     AddPeerRequest, AddPeerResponse, AppendEntriesRequest, AppendEntriesResponse,
-    DispatchTaskRequest, DispatchTaskResponse, HeartbeatRequest, HeartbeatResponse, NodeInfo,
-    RegisterRequest, RegisterResponse, RemovePeerRequest, RemovePeerResponse,
-    ReportTaskResultRequest, ReportTaskResultResponse, ResourceSnapshot, SubmitJobRequest,
-    SubmitJobResponse, VoteRequest, VoteResponse,
+    DispatchTaskRequest, DispatchTaskResponse, GetJobStatusRequest, GetJobStatusResponse,
+    HeartbeatRequest, HeartbeatResponse, NodeInfo, RegisterRequest, RegisterResponse,
+    RemovePeerRequest, RemovePeerResponse, ReportTaskResultRequest, ReportTaskResultResponse,
+    ResourceSnapshot, SubmitJobRequest, SubmitJobResponse, VoteRequest, VoteResponse,
 };
 use runtime::{
     job::JobId,
@@ -237,6 +237,23 @@ pub async fn report_task_result(
 
     let response = client
         .report_task_result(request)
+        .await
+        .map_err(|e| ClientError::QueryError(e.to_string()))?;
+
+    Ok(response.into_inner())
+}
+
+pub async fn get_job_status(
+    pool: &ClientPool,
+    addr: &str,
+    job_id: JobId,
+) -> Result<GetJobStatusResponse, ClientError> {
+    let mut client = pool.get(addr).await?;
+
+    let request = GetJobStatusRequest { job_id };
+
+    let response = client
+        .get_job_status(request)
         .await
         .map_err(|e| ClientError::QueryError(e.to_string()))?;
 
