@@ -1,28 +1,31 @@
 # Undergrid
 An easy to use locally hostable decentralized cloud capable of running on heterogeneous machines, with an automatic load balancer and parallelizer to automatically split tasks between nodes.
 
+Every machine on the network runs the same binary. Nodes find each other over mDNS, elect a leader with Raft, and report their CPU, memory, and disk to that leader. Submit a job of Docker tasks to any node and the leader places each task on whichever machine fits it best, respecting the dependency graph between tasks.
+
 ## Requirements
 ```
 rust
 docker
+protobuf-compiler
 ```
 
-## Usage
+## Running a node
 Clone the repository
 ```
 git clone https://github.com/Rosnaky/undergrid.git
 ```
 
-Run a node locally on a port. Currently only supports local networks.
+Start a node on a port. Currently only supports local networks.
 ```
-cargo run -- --port <PORT>
+cargo run -p agent -- --port <PORT>
 ```
 
-Now nodes will be able to join and leave the cluster, which is auto-managed with Raft consensus.
+Start more nodes the same way, on other ports or other machines. They discover each other automatically and manage joins and departures through Raft consensus, so there is nothing to configure.
 
-#### Submitting a Job
-Create a TOML file defining the job with Docker images:
-```
+## Submitting a job
+A job is a TOML file listing Docker tasks and what each one needs. Tasks with `depends_on` wait for their dependencies to finish; everything else runs in parallel across the cluster.
+```toml
 # test-job.toml
 
 [job]
@@ -46,42 +49,30 @@ disk_bytes = 1000000
 depends_on = ["greet"]
 timeout_s = 30
 ```
-or host a service
-```
-[job]
-id = "pineventory"
 
-[tasks.start_pineventory]
-image = "rosnaky/pineventory:latest"
-command = []
-cpu_cores = 1
-memory_bytes = 0
-disk_bytes = 0
-depends_on = []
-timeout_s = 30
-
+Tasks can also take environment variables, useful for containers that need credentials:
+```toml
 [tasks.start_pineventory.env]
-DISCORD_TOKEN=""
-DB_URL=""
-GOOGLE_SHEETS_FOLDER_ID=""
-GOOGLE_TOKEN_PATH=""
-GOOGLE_CREDS_PATH=""
+DISCORD_TOKEN = ""
+DB_URL = ""
 ```
 
-Use the following CLI command to submit a job
+Send it to any node on the network, it doesn't have to be the leader. Requests are forwarded for you.
 ```
-cargo run -p cli -- --node <NODE_ADDR> submit <path/to/job.toml>
-```
-
-#### Get Job Status
-```
-cargo run -p cli -- --node <NODE_ADDR> status <job_id>
+cargo run -p cli -- --node http://127.0.0.1:<PORT> submit path/to/test-job.toml
 ```
 
-Submit the job using the CLI. You can send it to any node on the network, it doesn't have to be the leader.
+Then check on it
 ```
-cargo run -p cli  -- --node http://127.0.0.1:<PORT> submit path/to/test-job.toml 
+cargo run -p cli -- --node http://127.0.0.1:<PORT> status <job_id>
 ```
+
+## Architecture
+Nodes talk to each other over gRPC, with the message and service definitions in `proto/undergrid.proto`.
+
+A node advertises itself as `_undergrid._tcp.local.` and browses for the same, registering with any peer it finds. Raft then decides who leads: followers send heartbeats with their latest resource snapshot, and a leader that stops hearing from a peer for ten seconds drops it from the cluster.
+
+The leader owns every job. It walks the task graph each tick, hands the ready tasks to the DRF scheduler along with what each node has free, and dispatches the resulting assignments. The scheduler orders tasks by their dominant resource share and places each one on the node it fits most tightly, so small tasks aren't starved by large ones and the cluster stays packed. Receiving nodes run the container through `docker run` and report stdout, stderr, and the exit code back to the leader, which advances the job until every task has finished or one has failed.
 
 ## Repository
 ```
